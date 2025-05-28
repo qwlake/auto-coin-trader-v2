@@ -4,7 +4,8 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     BINANCE_API_KEY: str
     BINANCE_SECRET: str
-    TESTNET: bool = True           # False → 실전
+    TESTNET: bool = False          # 메인넷 연결 여부
+    DRY_RUN: bool = True           # True일 때는 주문 시뮬레이션만
     SYMBOL: str = "BTCUSDT"
     DEPTH_LEVEL: int = 5           # 호가 N단
     OBI_LONG: float = 0.70
