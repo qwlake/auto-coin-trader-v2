@@ -20,36 +20,47 @@ def _qty(usdt: float, price: float) -> str:
     return format(qty, "f")
 
 async def place_limit_maker(side: str, price: float):
-    """LIMIT_MAKER 주문 실행 또는 시뮬레이션"""
-    qty = _qty(settings.SIZE_USDT, price)
-    order_params = {
-        "symbol": settings.SYMBOL,
-        "side": side,
-        "type": "LIMIT_MAKER",
-        "timeInForce": "GTC",
-        "quantity": qty,
-        "price": f"{price:.2f}",
-        "recvWindow": 5000,
-    }
+    """
+    spot 이면 spot LIMIT_MAKER, futures 면 futures post-only 지정가 자동 분기
+    """
+    qty_str = _qty(settings.SIZE_QUOTE, price)
 
-    # 1) DRY_RUN 모드 처리
     if settings.DRY_RUN:
-        log.info(f"[DRY RUN] {side} LIMIT_MAKER → {order_params}")
-        # 모의 응답 생성
+        log.info(f"[DRY_RUN] {side} LIMIT_MAKER simulated: {settings.SYMBOL} @ {price}, qty={qty_str}")
         return {
             "orderId": -1,
             "symbol": settings.SYMBOL,
             "side": side,
+            "type": "LIMIT_MAKER",
             "price": f"{price:.2f}",
-            "origQty": qty,
-            "status": "NEW",
-            "simulated": True,
+            "origQty": qty_str,
+            "status": "NEW"
         }
 
-    # 2) 실제 주문 실행
-    assert client, "AsyncClient not injected"
-    order = await client.create_order(**order_params)
-    log.info(f"{side} LIMIT_MAKER orderId={order['orderId']} @ {price:.2f}")
+    assert client, "AsyncClient가 주입되지 않았습니다."
+    if settings.MODE == "spot":
+        order = await client.create_order(
+            symbol=settings.SYMBOL,
+            side=side,
+            type="LIMIT_MAKER",
+            timeInForce="GTC",
+            quantity=qty_str,
+            price=f"{price:.2f}",
+            recvWindow=5000,
+        )
+    else:  # futures
+        order = await client.futures_create_order(
+            symbol=settings.SYMBOL,
+            side=side,
+            type="LIMIT",           # 지정가
+            timeInForce="GTX",      # POST-ONLY
+            quantity=qty_str,
+            price=f"{price:.2f}",
+            newOrderRespType="ACK",
+            recvWindow=5000,
+        )
+
+    log.info(f"[Executor] {side} LIMIT_MAKER {order['orderId']} @ {price}, qty={qty_str}")
     return order
 
 async def cancel_order(order_id: int):
