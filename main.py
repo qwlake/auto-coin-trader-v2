@@ -25,6 +25,8 @@ from executor.order_executor import place_limit_maker, inject_client
 from binance import AsyncClient
 
 async def runner():
+    monitor_task = asyncio.create_task(monitor_tasks(), name="TaskMonitor")
+
     # 1) AsyncClient 생성
     kwargs = {
         "api_key": settings.BINANCE_API_KEY,
@@ -46,7 +48,7 @@ async def runner():
         stream = DepthStream(client, settings.SYMBOL)
     else:
         stream = FuturesDepthStream(settings.SYMBOL)
-    ws_task = asyncio.create_task(stream.run())
+    ws_task = asyncio.create_task(stream.run(), name="DepthStream")
 
     # 4) OBI 스캘핑
     try:
@@ -77,6 +79,13 @@ async def runner():
 def _kill(loop: asyncio.AbstractEventLoop):
     for task in asyncio.all_tasks(loop):
         task.cancel()
+
+
+async def monitor_tasks():
+    while True:
+        all_tasks = asyncio.all_tasks()
+        log.info(f"[TaskMonitor] Total tasks: {len(all_tasks)}, running: {[t.get_name() for t in all_tasks]}")
+        await asyncio.sleep(5)
 
 if __name__ == '__main__':
     # 이벤트 루프 생성 및 설정

@@ -1,6 +1,5 @@
 import asyncio
-from binance import AsyncClient
-from binance.streams import BinanceSocketManager
+from binance import AsyncClient, BinanceSocketManager
 
 from config.settings import settings
 from utils.logger import log
