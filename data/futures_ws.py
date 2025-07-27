@@ -8,7 +8,7 @@ class FuturesDepthStream:
 
     async def run(self):
         try:
-            url = f"{settings.FUTURES_WS}/{self.symbol}@depth@100ms"
+            url = f"{settings.FUTURES_WS}/ws/{self.symbol}@depth@100ms"
             async with aiohttp.ClientSession() as session:
                 async with session.ws_connect(url) as ws:
                     async for msg in ws:

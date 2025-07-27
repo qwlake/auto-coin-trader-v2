@@ -19,7 +19,6 @@ import signal
 
 from config.settings import settings
 from utils.logger import log
-from data.market_ws import DepthStream
 from strategy.obi_scalper import signal as obi_signal
 from executor.order_executor import place_limit_maker, inject_client
 from binance import AsyncClient
@@ -43,11 +42,8 @@ async def runner():
     pos_manager = PositionManager(client)
     await pos_manager.init()
 
-    # 3) DepthStream 선택
-    if settings.MODE == "spot":
-        stream = DepthStream(client, settings.SYMBOL)
-    else:
-        stream = FuturesDepthStream(settings.SYMBOL)
+    # 3) FuturesDepthStream 초기화
+    stream = FuturesDepthStream(settings.SYMBOL)
     ws_task = asyncio.create_task(stream.run(), name="DepthStream")
 
     # 4) OBI 스캘핑
@@ -56,8 +52,8 @@ async def runner():
             snap = stream.depth
             if snap:
                 sig = obi_signal(snap)
-                bid = float(snap["bids"][0][0])
-                ask = float(snap["asks"][0][0])
+                bid = float(snap["b"][0][0])
+                ask = float(snap["a"][0][0])
                 mid = (bid + ask) / 2
 
                 if sig == "BUY":

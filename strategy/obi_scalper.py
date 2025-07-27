@@ -1,8 +1,8 @@
 from config.settings import settings
 
 def calc_obi(depth_snap: dict, level: int):
-    bids = depth_snap["bids"][:level]
-    asks = depth_snap["asks"][:level]
+    bids = depth_snap["b"][:level]
+    asks = depth_snap["a"][:level]
     bid_val = sum(float(p)*float(q) for p, q in bids)
     ask_val = sum(float(p)*float(q) for p, q in asks)
     return bid_val / (bid_val + ask_val)

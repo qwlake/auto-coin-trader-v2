@@ -21,7 +21,7 @@ def _qty(usdt: float, price: float) -> str:
 
 async def place_limit_maker(side: str, price: float):
     """
-    spot 이면 spot LIMIT_MAKER, futures 면 futures post-only 지정가 자동 분기
+    futures post-only 지정가 주문
     """
     qty_str = _qty(settings.SIZE_QUOTE, price)
 
@@ -31,34 +31,23 @@ async def place_limit_maker(side: str, price: float):
             "orderId": -1,
             "symbol": settings.SYMBOL,
             "side": side,
-            "type": "LIMIT_MAKER",
+            "type": "LIMIT",
             "price": f"{price:.2f}",
             "origQty": qty_str,
             "status": "NEW"
         }
 
     assert client, "AsyncClient가 주입되지 않았습니다."
-    if settings.MODE == "spot":
-        order = await client.create_order(
-            symbol=settings.SYMBOL,
-            side=side,
-            type="LIMIT_MAKER",
-            timeInForce="GTC",
-            quantity=qty_str,
-            price=f"{price:.2f}",
-            recvWindow=5000,
-        )
-    else:  # futures
-        order = await client.futures_create_order(
-            symbol=settings.SYMBOL,
-            side=side,
-            type="LIMIT",           # 지정가
-            timeInForce="GTX",      # POST-ONLY
-            quantity=qty_str,
-            price=f"{price:.2f}",
-            newOrderRespType="ACK",
-            recvWindow=5000,
-        )
+    order = await client.futures_create_order(
+        symbol=settings.SYMBOL,
+        side=side,
+        type="LIMIT",           # 지정가
+        timeInForce="GTX",      # POST-ONLY
+        quantity=qty_str,
+        price=f"{price:.2f}",
+        newOrderRespType="ACK",
+        recvWindow=5000,
+    )
 
     log.info(f"[Executor] {side} LIMIT_MAKER {order['orderId']} @ {price}, qty={qty_str}")
     return order
@@ -70,7 +59,7 @@ async def cancel_order(order_id: int):
         return {"orderId": order_id, "status": "CANCELED", "simulated": True}
 
     assert client, "AsyncClient not injected"
-    resp = await client.cancel_order(symbol=settings.SYMBOL, orderId=order_id)
+    resp = await client.futures_cancel_order(symbol=settings.SYMBOL, orderId=order_id)
     log.info(f"Canceled order {order_id}: status={resp.get('status')}")
     return resp
 
@@ -81,5 +70,5 @@ async def get_open_orders():
         return []
 
     assert client, "AsyncClient not injected"
-    orders = await client.get_open_orders(symbol=settings.SYMBOL)
+    orders = await client.futures_get_open_orders(symbol=settings.SYMBOL)
     return orders

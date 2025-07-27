@@ -37,7 +37,6 @@ class PositionManager:
                     order_id INTEGER PRIMARY KEY,
                     symbol TEXT NOT NULL,
                     side TEXT NOT NULL,
-                    mode TEXT NOT NULL,
                     orig_qty REAL NOT NULL
                 )
                 """
@@ -48,7 +47,6 @@ class PositionManager:
                     order_id INTEGER PRIMARY KEY,
                     symbol TEXT NOT NULL,
                     side TEXT NOT NULL,
-                    mode TEXT NOT NULL,
                     entry_price REAL NOT NULL,
                     quantity REAL NOT NULL
                 )
@@ -61,7 +59,6 @@ class PositionManager:
                     order_id INTEGER NOT NULL,
                     symbol TEXT NOT NULL,
                     side TEXT NOT NULL,
-                    mode TEXT NOT NULL,
                     entry_price REAL NOT NULL,
                     exit_price REAL NOT NULL,
                     quantity REAL NOT NULL,
@@ -83,14 +80,13 @@ class PositionManager:
         order_id = int(order["orderId"])
         symbol = order["symbol"]
         side = order["side"]
-        mode = settings.MODE
         orig_qty = float(order["origQty"])
 
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
                 """
-                INSERT OR IGNORE INTO pending_orders (order_id, symbol, side, mode, orig_qty)
-                VALUES (?, ?, ?, ?)
+                INSERT OR IGNORE INTO pending_orders (order_id, symbol, side, orig_qty)
+                VALUES (?, ?, ?)
                 """,
                 (order_id, symbol, side, orig_qty)
             )
@@ -107,15 +103,12 @@ class PositionManager:
             try:
                 # ── 1) pending_orders 테이블 주문 체크 ─────────────────────────────────────────
                 async with aiosqlite.connect(self.db_path) as db:
-                    cursor = await db.execute("SELECT order_id, symbol, side, mode, orig_qty FROM pending_orders")
+                    cursor = await db.execute("SELECT order_id, symbol, side, orig_qty FROM pending_orders")
                     rows = await cursor.fetchall()
 
-                for order_id, symbol, side, mode, orig_qty in rows:
+                for order_id, symbol, side, orig_qty in rows:
                     # 실제 Binance 주문 상태 확인
-                    if settings.MODE == "spot":
-                        resp = await self.client.get_order(symbol=symbol, orderId=order_id)
-                    else:
-                        resp = await self.client.futures_get_order(symbol=symbol, orderId=order_id)
+                    resp = await self.client.futures_get_order(symbol=symbol, orderId=order_id)
                     status = resp.get("status")
                     if status == "FILLED":
                         entry_price = (
@@ -129,10 +122,10 @@ class PositionManager:
                             await db.execute(
                                 """
                                 INSERT OR REPLACE INTO active_positions
-                                (order_id, symbol, side, mode, entry_price, quantity)
-                                VALUES (?, ?, ?, ?, ?)
+                                (order_id, symbol, side, entry_price, quantity)
+                                VALUES (?, ?, ?, ?)
                                 """,
-                                (order_id, symbol, side, mode, entry_price, executed_qty)
+                                (order_id, symbol, side, entry_price, executed_qty)
                             )
                             # 1-2) pending_orders에서 삭제
                             await db.execute(
@@ -148,19 +141,16 @@ class PositionManager:
 
                 # ── 2) active_positions TP/SL 체크 ─────────────────────────────────────────────
                 # 현재가 가져오기 (여기서는 단일 심볼 가정. 멀티심볼은 각 심볼별 조회 또는 WebSocket 유지)
-                if settings.MODE == "spot":
-                    ticker = await self.client.get_symbol_ticker(symbol=settings.SYMBOL)
-                else:
-                    ticker = await self.client.futures_symbol_ticker(symbol=settings.SYMBOL)
+                ticker = await self.client.futures_symbol_ticker(symbol=settings.SYMBOL)
                 current_price = float(ticker["price"])
 
                 async with aiosqlite.connect(self.db_path) as db:
                     cursor = await db.execute(
-                        "SELECT order_id, symbol, side, mode, entry_price, quantity FROM active_positions"
+                        "SELECT order_id, symbol, side, entry_price, quantity FROM active_positions"
                     )
                     active_rows = await cursor.fetchall()
 
-                for order_id, symbol, side, mode, entry_price, qty in active_rows:
+                for order_id, symbol, side, entry_price, qty in active_rows:
                     # TP/SL 가격 계산
                     if side == "BUY":
                         tp_price = entry_price * (1 + settings.TP_PCT)
@@ -168,20 +158,12 @@ class PositionManager:
                         if current_price >= tp_price or current_price <= sl_price:
                             # 시장가 청산 (반대 매매)
                             market_side = "SELL"
-                            if settings.MODE == "spot":
-                                market_order = await self.client.create_order(
-                                    symbol=symbol,
-                                    side=market_side,
-                                    type="MARKET",
-                                    quantity=f"{qty:.6f}",
-                                )
-                            else:
-                                market_order = await self.client.futures_create_order(
-                                    symbol=symbol,
-                                    side=market_side,
-                                    type="MARKET",
-                                    quantity=f"{qty:.6f}",
-                                )
+                            market_order = await self.client.futures_create_order(
+                                symbol=symbol,
+                                side=market_side,
+                                type="MARKET",
+                                quantity=f"{qty:.6f}",
+                            )
                             exit_price = float(market_order["fills"][0]["price"])
                             pnl = (exit_price - entry_price) * qty
 
@@ -190,10 +172,10 @@ class PositionManager:
                                 await db.execute(
                                     """
                                     INSERT INTO closed_positions
-                                    (order_id, symbol, side, mode, entry_price, exit_price, quantity, pnl)
-                                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                                    (order_id, symbol, side, entry_price, exit_price, quantity, pnl)
+                                    VALUES (?, ?, ?, ?, ?, ?)
                                     """,
-                                    (order_id, symbol, side, mode, entry_price, exit_price, qty, pnl)
+                                    (order_id, symbol, side, entry_price, exit_price, qty, pnl)
                                 )
                                 # 2-2) active_positions에서 삭제
                                 await db.execute(
@@ -209,20 +191,12 @@ class PositionManager:
                         sl_price = entry_price * (1 + settings.SL_PCT)
                         if current_price <= tp_price or current_price >= sl_price:
                             market_side = "BUY"
-                            if settings.MODE == "spot":
-                                market_order = await self.client.create_order(
-                                    symbol=symbol,
-                                    side=market_side,
-                                    type="MARKET",
-                                    quantity=f"{qty:.6f}",
-                                )
-                            else:
-                                market_order = await self.client.futures_create_order(
-                                    symbol=symbol,
-                                    side=market_side,
-                                    type="MARKET",
-                                    quantity=f"{qty:.6f}",
-                                )
+                            market_order = await self.client.futures_create_order(
+                                symbol=symbol,
+                                side=market_side,
+                                type="MARKET",
+                                quantity=f"{qty:.6f}",
+                            )
                             exit_price = float(market_order["fills"][0]["price"])
                             pnl = (entry_price - exit_price) * qty
 
@@ -230,10 +204,10 @@ class PositionManager:
                                 await db.execute(
                                     """
                                     INSERT INTO closed_positions
-                                    (order_id, symbol, side, mode, entry_price, exit_price, quantity, pnl)
-                                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                                    (order_id, symbol, side, entry_price, exit_price, quantity, pnl)
+                                    VALUES (?, ?, ?, ?, ?, ?)
                                     """,
-                                    (order_id, symbol, side, mode, entry_price, exit_price, qty, pnl)
+                                    (order_id, symbol, side, entry_price, exit_price, qty, pnl)
                                 )
                                 await db.execute(
                                     "DELETE FROM active_positions WHERE order_id = ?",

@@ -11,7 +11,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a cryptocurrency trading bot that implements an Order Book Imbalance (OBI) scalping strategy. The bot monitors market depth data from Binance and places limit orders when order book imbalance exceeds configured thresholds. It supports both spot and futures trading modes.
+This is a cryptocurrency trading bot that implements an Order Book Imbalance (OBI) scalping strategy. The bot monitors market depth data from Binance and places limit orders when order book imbalance exceeds configured thresholds. It supports futures trading only.
 
 ## Environment Setup
 
@@ -40,13 +40,11 @@ The system follows an event-driven architecture with these core components:
 
 ### Configuration (`config/settings.py`)
 - Uses Pydantic settings with environment variable loading
-- Key parameters: `MODE` (spot/futures), `SYMBOL`, `OBI_LONG`/`OBI_SHORT` thresholds, `TP_PCT`/`SL_PCT`
+- Key parameters: `SYMBOL`, `OBI_LONG`/`OBI_SHORT` thresholds, `TP_PCT`/`SL_PCT`
 - `SIZE_QUOTE`: Amount in quote currency (USDT/USDC) to trade per order
 
 ### Data Layer (`data/`)
-- **`market_ws.py`**: Spot market depth WebSocket stream using BinanceSocketManager
-- **`futures_ws.py`**: Futures market depth WebSocket stream 
-- Both maintain real-time order book snapshots in `depth` attribute
+- **`futures_ws.py`**: Futures market depth WebSocket stream maintaining real-time order book snapshots in `depth` attribute
 
 ### Strategy (`strategy/obi_scalper.py`)
 - **`calc_obi()`**: Calculates order book imbalance ratio from depth data
@@ -54,8 +52,8 @@ The system follows an event-driven architecture with these core components:
 - OBI = bid_volume / (bid_volume + ask_volume) for top N levels
 
 ### Execution Layer (`executor/`)
-- **`order_executor.py`**: Places limit maker orders via Binance API
-  - Handles both spot (LIMIT_MAKER) and futures (LIMIT + GTX) order types
+- **`order_executor.py`**: Places futures limit maker orders via Binance API
+  - Uses futures LIMIT + GTX (post-only) order types
   - Includes DRY_RUN mode for testing
   - Uses global client injection pattern
 - **`position_manager.py`**: Manages order lifecycle and position tracking
@@ -66,7 +64,7 @@ The system follows an event-driven architecture with these core components:
 ### Main Loop (`main.py`)
 1. Creates AsyncClient and injects it into executor
 2. Initializes PositionManager with database
-3. Starts appropriate WebSocket depth stream (spot or futures)
+3. Starts futures WebSocket depth stream
 4. Continuously monitors OBI signals and places orders
 5. Handles graceful shutdown with signal handlers
 

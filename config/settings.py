@@ -9,8 +9,6 @@ class Settings(BaseSettings):
     # Dry run
     DRY_RUN: bool = False
 
-    # 시장 타입: "spot" | "futures"
-    MODE: str = "spot"
 
     # 심볼 (ex: "BTCUSDT" 또는 "BTCUSDC_PERP")
     SYMBOL: str = "BTCUSDT"
@@ -35,9 +33,6 @@ class Settings(BaseSettings):
     def FUTURES_WS(self) -> str:
         return "wss://fstream.binancefuture.com" if self.TESTNET else "wss://fstream.binance.com"
 
-    @property
-    def SPOT_REST(self) -> str:
-        return "https://testnet.binance.vision" if self.TESTNET else "https://api.binance.com"
 
     model_config = {               # ← v2 방식의 설정
         "env_file": ".env",
