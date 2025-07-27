@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Basic Rules
+
+- Save every file you edit into git with a commit message that describes the change.
+
 ## Project Overview
 
 This is a cryptocurrency trading bot that implements an Order Book Imbalance (OBI) scalping strategy. The bot monitors market depth data from Binance and places limit orders when order book imbalance exceeds configured thresholds. It supports both spot and futures trading modes.
