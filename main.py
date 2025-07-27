@@ -50,7 +50,7 @@ async def runner():
     try:
         while True:
             snap = stream.depth
-            if snap:
+            if snap and "b" in snap and "a" in snap and len(snap["b"]) > 0 and len(snap["a"]) > 0:
                 sig = obi_signal(snap)
                 bid = float(snap["b"][0][0])
                 ask = float(snap["a"][0][0])

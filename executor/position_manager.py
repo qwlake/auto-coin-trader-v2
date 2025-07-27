@@ -86,7 +86,7 @@ class PositionManager:
             await db.execute(
                 """
                 INSERT OR IGNORE INTO pending_orders (order_id, symbol, side, orig_qty)
-                VALUES (?, ?, ?)
+                VALUES (?, ?, ?, ?)
                 """,
                 (order_id, symbol, side, orig_qty)
             )
@@ -123,7 +123,7 @@ class PositionManager:
                                 """
                                 INSERT OR REPLACE INTO active_positions
                                 (order_id, symbol, side, entry_price, quantity)
-                                VALUES (?, ?, ?, ?)
+                                VALUES (?, ?, ?, ?, ?)
                                 """,
                                 (order_id, symbol, side, entry_price, executed_qty)
                             )
@@ -173,7 +173,7 @@ class PositionManager:
                                     """
                                     INSERT INTO closed_positions
                                     (order_id, symbol, side, entry_price, exit_price, quantity, pnl)
-                                    VALUES (?, ?, ?, ?, ?, ?)
+                                    VALUES (?, ?, ?, ?, ?, ?, ?)
                                     """,
                                     (order_id, symbol, side, entry_price, exit_price, qty, pnl)
                                 )
@@ -205,7 +205,7 @@ class PositionManager:
                                     """
                                     INSERT INTO closed_positions
                                     (order_id, symbol, side, entry_price, exit_price, quantity, pnl)
-                                    VALUES (?, ?, ?, ?, ?, ?)
+                                    VALUES (?, ?, ?, ?, ?, ?, ?)
                                     """,
                                     (order_id, symbol, side, entry_price, exit_price, qty, pnl)
                                 )
