@@ -4,7 +4,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Basic Rules
 
-- Save every file you edit into git with a commit message that describes the change.
+- All files you've modified should be committed to git with a descriptive message at the end of each step. The branch name should be claude.
+- Don't write any code or files before user requested it.
+- Complex requests should be broken down into smaller tasks.
+- Thinkable requests should be preprocessed using gemini(e.g. gemini -p {prompt}).
 
 ## Project Overview
 
