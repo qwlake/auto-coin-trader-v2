@@ -1,423 +1,636 @@
-# VWAP Mean Reversion Strategy 구현 가이드
+# VWAP Mean Reversion Strategy - Technical Implementation Specification
 
-## 1. 전략 개요
+## 1. Strategy Overview & Requirements
 
-### 핵심 컨셉
-- **평균 회귀 전략**: VWAP에서 이탈한 가격이 다시 VWAP로 돌아올 것을 기대하는 전략
-- **시장 상태 필터**: ADX로 횡보/추세 시장 구분하여 횡보에서만 거래
-- **리스크 관리**: 0.6% 익절, 0.3% 손절로 고정
-- **실행 방식**: 바이낸스 선물 LIMIT 주문 (기존 OBI 봇과 동일)
+### Core Strategy Concept
+- **Mean Reversion Strategy**: Trade against price deviations from VWAP with expectation of price reversion
+- **Market Regime Filter**: Use ADX to distinguish between trending and sideways markets
+- **Risk Management**: Tight profit/loss targets with volatility-based position sizing
+- **Execution Method**: Limit orders for entry, market orders for exit
 
-## 2. 필요한 기술적 지표
+### Performance Targets
+- **Win Rate**: Minimum 39.8% to achieve profitability after fees
+- **Profit Target**: +0.6% per winning trade
+- **Loss Limit**: -0.3% per losing trade
+- **Fee Structure**: 0.02% maker (entry), 0.05% taker (exit when needed)
+- **Net Profit**: +0.56% per win, -0.37% per loss
 
-### 2.1 VWAP 계산
+### Market Conditions
+- **Optimal Environment**: Low volatility sideways markets (ADX < 20)
+- **Avoid**: Strong trending markets (ADX > 40)
+- **Safety Mechanism**: Halt trading during high volatility spikes (≥0.15% in 5 seconds)
+
+## 2. Technical Indicators Needed
+
+### 2.1 VWAP (Volume Weighted Average Price)
+```
+Mathematical Definition:
+VWAP = Σ(Price × Volume) / Σ(Volume)
+
+Implementation Requirements:
+- Rolling calculation over trading session (reset at session start)
+- Use typical price: (High + Low + Close) / 3
+- Maintain running sums of (price × volume) and volume
+- Update on every tick/trade data
+- Memory efficient: avoid storing all historical data
+```
+
+**Data Structure:**
 ```python
 class VWAPCalculator:
-    def __init__(self):
-        self.cumulative_pv = 0.0      # 가격 × 거래량 누적
-        self.cumulative_volume = 0.0   # 거래량 누적
-        self.session_start = None      # 세션 시작 시간 (UTC 0시)
-
-    def update(self, price: float, volume: float):
-        self.cumulative_pv += price * volume
-        self.cumulative_volume += volume
-        return self.get_vwap()
-    
-    def get_vwap(self):
-        if self.cumulative_volume > 0:
-            return self.cumulative_pv / self.cumulative_volume
-        return 0.0
-
-    def reset_session(self):
-        self.cumulative_pv = 0.0
-        self.cumulative_volume = 0.0
+    cumulative_pv: float  # price × volume sum
+    cumulative_volume: float  # volume sum
+    current_vwap: float
+    session_start: datetime
 ```
 
-### 2.2 ADX (추세 강도) 계산
-```python
-class ADXCalculator:
-    def __init__(self, period=14):
-        self.period = period
-        self.price_history = []
-        
-    def update(self, high, low, close):
-        self.price_history.append({'high': high, 'low': low, 'close': close})
-        if len(self.price_history) > self.period * 2:
-            self.price_history.pop(0)
-        return self.calculate_adx()
-    
-    def calculate_adx(self):
-        # ADX 계산 로직 (14개 캔들 필요)
-        if len(self.price_history) < self.period + 1:
-            return 0
-        # 실제 구현에서는 talib 라이브러리 사용 권장
-        pass
+### 2.2 ADX (Average Directional Index)
+```
+Calculation Steps:
+1. True Range (TR) = max(High-Low, abs(High-PrevClose), abs(Low-PrevClose))
+2. Directional Movement:
+   - +DM = High - PrevHigh (if positive and > abs(Low - PrevLow), else 0)
+   - -DM = PrevLow - Low (if positive and > abs(High - PrevHigh), else 0)
+3. Smoothed averages (14-period typical):
+   - ATR = EMA(TR, 14)
+   - +DI = 100 × EMA(+DM, 14) / ATR
+   - -DI = 100 × EMA(-DM, 14) / ATR
+4. DX = 100 × abs(+DI - -DI) / (+DI + -DI)
+5. ADX = EMA(DX, 14)
+
+Interpretation:
+- ADX < 20: Weak trend (sideways market) → Trade allowed
+- 20 ≤ ADX < 40: Developing trend → Monitor closely
+- ADX ≥ 40: Strong trend → Halt trading
 ```
 
-### 2.3 VWAP 밴드
-```python
-class VWAPBands:
-    def __init__(self, multiplier=1.5, period=20):
-        self.multiplier = multiplier
-        self.period = period
-        self.price_deviations = []
-    
-    def update(self, current_price, vwap):
-        deviation = abs(current_price - vwap)
-        self.price_deviations.append(deviation)
-        if len(self.price_deviations) > self.period:
-            self.price_deviations.pop(0)
-        
-        if len(self.price_deviations) >= self.period:
-            std_dev = statistics.stdev(self.price_deviations)
-            return {
-                'upper': vwap + (std_dev * self.multiplier),
-                'lower': vwap - (std_dev * self.multiplier)
-            }
-        return None
+### 2.3 Standard Deviation Bands
+```
+VWAP Bands Calculation:
+- Upper Band = VWAP + (StdDev × Multiplier)
+- Lower Band = VWAP - (StdDev × Multiplier)
+
+Standard Deviation:
+- Use price deviations from VWAP over rolling window
+- Window size: 20-50 periods (configurable)
+- Update on each new price tick
+- Multiplier: 1.0-2.0 (configurable, affects band width)
 ```
 
-## 3. 데이터 파이프라인
+### 2.4 Volatility Monitor
+```
+5-Second Volatility Calculation:
+volatility_5s = abs(current_price - price_5s_ago) / price_5s_ago
 
-### 3.1 필요한 데이터 스트림
-기존 `futures_ws.py`를 확장하여 다음 스트림 추가:
-
-```python
-# data/futures_ws.py 확장
-class FuturesVWAPStream(FuturesDepthStream):
-    def __init__(self, symbol: str):
-        super().__init__(symbol)
-        self.vwap_calculator = VWAPCalculator()
-        self.adx_calculator = ADXCalculator()
-        self.bands = VWAPBands()
-        
-    async def run(self):
-        # 기존 depth stream + trade stream + kline stream 추가
-        client = await AsyncClient.create(...)
-        bm = BinanceSocketManager(client)
-        
-        # 3개 스트림 동시 실행
-        tasks = [
-            self._depth_stream(bm),
-            self._trade_stream(bm),      # VWAP 계산용
-            self._kline_stream(bm)       # ADX 계산용
-        ]
-        await asyncio.gather(*tasks)
-        
-    async def _trade_stream(self, bm):
-        async with bm.futures_trade_socket(self.symbol) as stream:
-            while True:
-                msg = await stream.recv()
-                price = float(msg['p'])
-                volume = float(msg['q'])
-                self.current_vwap = self.vwap_calculator.update(price, volume)
-                
-    async def _kline_stream(self, bm):
-        async with bm.futures_kline_socket(self.symbol, '1m') as stream:
-            while True:
-                msg = await stream.recv()
-                if msg['k']['x']:  # 캔들 종료
-                    high = float(msg['k']['h'])
-                    low = float(msg['k']['l'])
-                    close = float(msg['k']['c'])
-                    self.current_adx = self.adx_calculator.update(high, low, close)
+Requirements:
+- Maintain price buffer for last 5 seconds
+- Calculate on every price update
+- Trigger safety halt if ≥ 0.15%
+- Reset mechanism after 10-minute pause
 ```
 
-### 3.2 설정 파라미터
-`config/settings.py`에 추가:
+## 3. Data Pipeline Requirements
 
+### 3.1 Required Market Data Streams
+
+**Primary Data Source:**
+- **Futures WebSocket Stream**: Already available via `futures_ws.py`
+- **Trade Stream**: Individual trades for VWAP calculation
+- **Kline Stream**: 1-second or 1-minute candles for ADX calculation
+- **Depth Stream**: Current order book for execution (already available)
+
+**Data Stream Integration:**
 ```python
-class Settings(BaseSettings):
-    # 기존 설정들...
-    
-    # VWAP 전략 설정
-    STRATEGY_TYPE: str = "OBI"  # "OBI" 또는 "VWAP"
-    
-    # VWAP 파라미터
-    VWAP_BAND_MULTIPLIER: float = 1.5
-    VWAP_PROFIT_TARGET: float = 0.006  # 0.6%
-    VWAP_STOP_LOSS: float = 0.003      # 0.3%
-    
-    # ADX 파라미터
-    ADX_PERIOD: int = 14
-    ADX_THRESHOLD: float = 20.0  # ADX < 20일 때만 거래
-```
-
-## 4. 전략 로직 구현
-
-### 4.1 VWAP 전략 모듈 
-`strategy/vwap_strategy.py` 새로 생성:
-
-```python
-from config.settings import settings
-import statistics
-
-class VWAPStrategy:
+# Extend existing futures_ws.py
+class FuturesDataStream:
     def __init__(self):
         self.vwap_calculator = VWAPCalculator()
         self.adx_calculator = ADXCalculator()
-        self.bands = VWAPBands()
-        self.is_ready = False
+        self.volatility_monitor = VolatilityMonitor()
+        self.band_calculator = BandCalculator()
+    
+    async def handle_trade_data(self, trade_data):
+        # Update VWAP with each trade
         
-    def update_data(self, trade_data=None, kline_data=None, current_price=None):
-        # 트레이드 데이터로 VWAP 업데이트
-        if trade_data:
-            self.vwap_calculator.update(trade_data['price'], trade_data['volume'])
-            
-        # 캔들 데이터로 ADX 업데이트
-        if kline_data:
-            self.adx_calculator.update(
-                kline_data['high'], 
-                kline_data['low'], 
-                kline_data['close']
-            )
-            
-        # 밴드 업데이트
-        if current_price and self.vwap_calculator.get_vwap() > 0:
-            self.bands.update(current_price, self.vwap_calculator.get_vwap())
-            
-        # 준비 상태 체크 (ADX 계산에 충분한 데이터 필요)
-        self.is_ready = len(self.adx_calculator.price_history) >= 14
+    async def handle_kline_data(self, kline_data):
+        # Update ADX with each 1m candle close
         
-    def signal(self, current_price):
-        if not self.is_ready:
-            return None
-            
-        vwap = self.vwap_calculator.get_vwap()
-        adx = self.adx_calculator.calculate_adx()
-        bands = self.bands.update(current_price, vwap)
+    async def handle_price_update(self, price):
+        # Update volatility monitor and bands
+```
+
+### 3.2 Data Storage and Buffering
+
+**In-Memory Buffers:**
+- **VWAP State**: Cumulative values only (no historical storage)
+- **ADX Buffer**: Last 28 periods (14 for calculation + 14 for smoothing)
+- **Price History**: Last 5 seconds for volatility calculation
+- **Band Calculation**: Last 20-50 price points for standard deviation
+
+**Persistent Storage:**
+- **Session Tracking**: VWAP reset times in database
+- **Performance Metrics**: Win/loss ratios, profitability tracking
+- **Configuration**: Strategy parameters in settings
+
+### 3.3 Real-time vs Historical Data Usage
+
+**Real-time Components:**
+- VWAP calculation (trade-by-trade updates)
+- Volatility monitoring (continuous price tracking)
+- Entry/exit signal generation
+
+**Historical Components:**
+- ADX calculation (requires 28+ historical periods)
+- Standard deviation bands (requires 20-50 historical prices)
+- Initial warm-up period before strategy activation
+
+## 4. Core Strategy Logic Flow
+
+### 4.1 Initialization Sequence
+```
+1. Load configuration parameters
+2. Initialize technical indicators with warm-up data
+3. Establish WebSocket connections
+4. Wait for indicator stabilization (minimum 30 data points)
+5. Begin strategy execution
+```
+
+### 4.2 Main Trading Loop
+```python
+async def main_strategy_loop():
+    while trading_active:
+        # 1. Data Updates
+        update_vwap(latest_trade)
+        update_adx(latest_kline)
+        update_volatility(current_price)
+        update_bands(current_price)
         
-        # ADX 필터: 횡보 시장에서만 거래
-        if adx > settings.ADX_THRESHOLD:
-            return None
+        # 2. Safety Checks
+        if check_volatility_halt():
+            pause_trading(600)  # 10 minutes
+            continue
             
-        if not bands:
-            return None
+        # 3. Market Regime Filter
+        if adx_value > 40:
+            cancel_all_orders()
+            continue
             
-        # 신호 생성
-        if current_price <= bands['lower'] and current_price < vwap:
-            return "LONG"   # 하단 밴드 터치 + VWAP 아래
-        elif current_price >= bands['upper'] and current_price > vwap:
-            return "SHORT"  # 상단 밴드 터치 + VWAP 위
+        if adx_value > 20:
+            continue  # Wait for sideways market
             
+        # 4. Signal Generation
+        signal = generate_entry_signal()
+        if signal:
+            place_limit_order(signal)
+            
+        # 5. Position Management
+        monitor_active_positions()
+        
+        await asyncio.sleep(0.1)  # 100ms cycle
+```
+
+### 4.3 Entry Signal Logic
+```python
+def generate_entry_signal():
+    current_price = get_current_price()
+    vwap = get_current_vwap()
+    upper_band = vwap + (std_dev * band_multiplier)
+    lower_band = vwap - (std_dev * band_multiplier)
+    
+    # ADX filter must pass
+    if adx_value >= 20:
         return None
-```
-
-### 4.2 main.py에서 VWAP 전략 사용
-기존 OBI 로직을 VWAP로 교체:
-
-```python
-# main.py 수정 부분
-from strategy.vwap_strategy import VWAPStrategy
-
-async def runner():
-    # ... 기존 초기화 코드 ...
-    
-    # VWAP 전략 초기화
-    vwap_strategy = VWAPStrategy()
-    
-    # FuturesVWAPStream 사용
-    stream = FuturesVWAPStream(settings.SYMBOL)
-    ws_task = asyncio.create_task(stream.run())
-    
-    try:
-        while True:
-            # 현재 가격 획득
-            if stream.depth and "b" in stream.depth and "a" in stream.depth:
-                bid = float(stream.depth["b"][0][0])
-                ask = float(stream.depth["a"][0][0])
-                mid = (bid + ask) / 2
-                
-                # 전략 데이터 업데이트 
-                vwap_strategy.update_data(current_price=mid)
-                
-                # 신호 생성
-                sig = vwap_strategy.signal(mid)
-                
-                if sig == "LONG":
-                    order = await place_limit_maker("BUY", mid)
-                    await pos_manager.register_order(order)
-                elif sig == "SHORT":
-                    order = await place_limit_maker("SELL", mid)
-                    await pos_manager.register_order(order)
-                    
-            await asyncio.sleep(0.2)
-    except:
-        # ... 기존 정리 코드 ...
-```
-
-## 5. 포지션 관리 확장
-
-### 5.1 VWAP 전용 손익 관리
-기존 `executor/position_manager.py`에서 VWAP 전략용 TP/SL 로직 추가:
-
-```python
-# position_manager.py에 추가할 메서드
-async def check_vwap_exit_conditions(self, position, current_price, current_vwap):
-    """VWAP 전략 전용 청산 조건 체크"""
-    entry_price = position['entry_price']
-    side = position['side']
-    
-    # 1. 고정 손익 목표
-    if side == 'BUY':
-        profit_target = entry_price * (1 + settings.VWAP_PROFIT_TARGET)
-        stop_loss = entry_price * (1 - settings.VWAP_STOP_LOSS)
         
-        if current_price >= profit_target:
-            return "PROFIT"
-        elif current_price <= stop_loss:
-            return "LOSS"
-        # VWAP 회귀 청산 (롱 포지션이 VWAP 위로 올라가면)
-        elif current_price >= current_vwap:
-            return "VWAP_REVERSION"
-            
-    elif side == 'SELL':
-        profit_target = entry_price * (1 - settings.VWAP_PROFIT_TARGET)
-        stop_loss = entry_price * (1 + settings.VWAP_STOP_LOSS)
+    # Check band boundaries
+    if current_price >= upper_band and current_price > vwap:
+        return "SHORT"  # Price above VWAP at upper band
+    elif current_price <= lower_band and current_price < vwap:
+        return "LONG"   # Price below VWAP at lower band
         
-        if current_price <= profit_target:
-            return "PROFIT"
-        elif current_price >= stop_loss:
-            return "LOSS"
-        # VWAP 회귀 청산 (숏 포지션이 VWAP 아래로 내려가면)
-        elif current_price <= current_vwap:
-            return "VWAP_REVERSION"
-    
     return None
 ```
 
-### 5.2 데이터베이스 확장
-기존 테이블에 VWAP 관련 컬럼 추가:
+### 4.4 Exit Condition Evaluation
+```python
+def check_exit_conditions(position):
+    current_price = get_current_price()
+    entry_price = position.entry_price
+    side = position.side
+    
+    # Profit/Loss targets
+    if side == "LONG":
+        profit_target = entry_price * 1.006  # +0.6%
+        stop_loss = entry_price * 0.997      # -0.3%
+        
+        if current_price >= profit_target:
+            return "PROFIT_TARGET"
+        elif current_price <= stop_loss:
+            return "STOP_LOSS"
+            
+    elif side == "SHORT":
+        profit_target = entry_price * 0.994  # -0.6%
+        stop_loss = entry_price * 1.003      # +0.3%
+        
+        if current_price <= profit_target:
+            return "PROFIT_TARGET"
+        elif current_price >= stop_loss:
+            return "STOP_LOSS"
+    
+    # VWAP reversion check
+    vwap = get_current_vwap()
+    if (side == "LONG" and current_price >= vwap) or \
+       (side == "SHORT" and current_price <= vwap):
+        return "VWAP_REVERSION"
+        
+    return None
+```
 
+## 5. Integration Architecture
+
+### 5.1 Integration with Existing Bot Structure
+
+**New Strategy Module** (`strategy/vwap_mean_reversion.py`):
+```python
+class VWAPMeanReversionStrategy:
+    def __init__(self):
+        self.vwap_calc = VWAPCalculator()
+        self.adx_calc = ADXCalculator(period=14)
+        self.volatility_monitor = VolatilityMonitor()
+        self.band_calc = BandCalculator()
+        self.trading_halted = False
+        self.halt_until = None
+        
+    def update_indicators(self, trade_data, kline_data):
+        # Update all technical indicators
+        
+    def generate_signal(self):
+        # Return LONG/SHORT/None based on strategy rules
+        
+    def should_halt_trading(self):
+        # Check volatility and ADX conditions
+```
+
+**Enhanced WebSocket Handler** (`data/futures_ws.py` modifications):
+```python
+# Add to existing FuturesWebSocket class
+async def _handle_trade_stream(self, msg):
+    # Process individual trades for VWAP
+    trade_data = {
+        'price': float(msg['p']),
+        'quantity': float(msg['q']),
+        'timestamp': int(msg['T'])
+    }
+    self.strategy.update_vwap(trade_data)
+
+async def _handle_kline_stream(self, msg):
+    # Process kline data for ADX
+    if msg['k']['x']:  # Kline is closed
+        kline_data = {
+            'high': float(msg['k']['h']),
+            'low': float(msg['k']['l']),
+            'close': float(msg['k']['c']),
+            'volume': float(msg['k']['v'])
+        }
+        self.strategy.update_adx(kline_data)
+```
+
+### 5.2 Database Schema Modifications
+
+**New Configuration Table:**
 ```sql
--- active_positions 테이블에 컬럼 추가
-ALTER TABLE active_positions ADD COLUMN strategy_type TEXT DEFAULT 'OBI';
+CREATE TABLE vwap_strategy_config (
+    id INTEGER PRIMARY KEY,
+    vwap_band_multiplier REAL DEFAULT 1.5,
+    adx_period INTEGER DEFAULT 14,
+    adx_trend_threshold REAL DEFAULT 20.0,
+    adx_strong_trend_threshold REAL DEFAULT 40.0,
+    volatility_threshold REAL DEFAULT 0.0015,
+    volatility_halt_duration INTEGER DEFAULT 600,
+    profit_target_pct REAL DEFAULT 0.006,
+    stop_loss_pct REAL DEFAULT 0.003,
+    session_reset_hour INTEGER DEFAULT 0
+);
+```
+
+**Enhanced Position Tracking:**
+```sql
+-- Add columns to existing tables
+ALTER TABLE active_positions ADD COLUMN strategy_type TEXT DEFAULT 'VWAP';
 ALTER TABLE active_positions ADD COLUMN vwap_at_entry REAL;
-
--- closed_positions 테이블에 컬럼 추가  
-ALTER TABLE closed_positions ADD COLUMN strategy_type TEXT DEFAULT 'OBI';
-ALTER TABLE closed_positions ADD COLUMN exit_reason TEXT;
+ALTER TABLE closed_positions ADD COLUMN strategy_type TEXT DEFAULT 'VWAP';
+ALTER TABLE closed_positions ADD COLUMN exit_reason TEXT;  -- 'PROFIT', 'LOSS', 'VWAP_REVERSION'
 ```
 
-## 6. 구현시 주의사항
+### 5.3 Configuration Parameters
 
-### 6.1 ADX 계산 라이브러리
-ADX 계산은 복잡하므로 기존 라이브러리 사용 권장:
-
-```bash
-# TA-Lib 설치
-pip install ta-lib
-```
-
+**New Settings** (extend `config/settings.py`):
 ```python
-import talib
-import numpy as np
-
-class ADXCalculator:
-    def __init__(self, period=14):
-        self.period = period
-        self.highs = []
-        self.lows = []
-        self.closes = []
-        
-    def update(self, high, low, close):
-        self.highs.append(high)
-        self.lows.append(low)  
-        self.closes.append(close)
-        
-        # 버퍼 크기 제한
-        max_size = self.period * 3
-        if len(self.highs) > max_size:
-            self.highs = self.highs[-max_size:]
-            self.lows = self.lows[-max_size:]
-            self.closes = self.closes[-max_size:]
-            
-        return self.calculate_adx()
-        
-    def calculate_adx(self):
-        if len(self.highs) < self.period * 2:
-            return 0
-            
-        highs = np.array(self.highs, dtype=np.float64)
-        lows = np.array(self.lows, dtype=np.float64)
-        closes = np.array(self.closes, dtype=np.float64)
-        
-        adx = talib.ADX(highs, lows, closes, timeperiod=self.period)
-        return adx[-1] if not np.isnan(adx[-1]) else 0
+class Settings(BaseSettings):
+    # ... existing settings ...
+    
+    # VWAP Strategy Parameters
+    STRATEGY_TYPE: str = "VWAP"  # "OBI" or "VWAP"
+    
+    # VWAP Specific
+    VWAP_BAND_MULTIPLIER: float = 1.5
+    VWAP_STDDEV_PERIOD: int = 20
+    
+    # ADX Parameters
+    ADX_PERIOD: int = 14
+    ADX_TREND_THRESHOLD: float = 20.0
+    ADX_STRONG_TREND_THRESHOLD: float = 40.0
+    
+    # Volatility Monitor
+    VOLATILITY_THRESHOLD: float = 0.0015  # 0.15%
+    VOLATILITY_HALT_DURATION: int = 600   # 10 minutes
+    
+    # Entry/Exit
+    VWAP_PROFIT_TARGET: float = 0.006     # 0.6%
+    VWAP_STOP_LOSS: float = 0.003         # 0.3%
+    
+    # Session Management
+    SESSION_RESET_HOUR: int = 0  # UTC hour to reset VWAP
 ```
 
-### 6.2 VWAP 세션 리셋
-일반적으로 VWAP은 하루 단위로 리셋됩니다:
+## 6. Implementation Challenges & Solutions
 
+### 6.1 Performance Considerations
+
+**Challenge**: Real-time indicator calculations with minimal latency
+**Solution**: 
+- Use incremental calculations (avoid recalculating entire history)
+- Implement circular buffers for fixed-size historical data
+- Pre-allocate memory structures
+- Use numpy arrays for mathematical operations
+
+**Challenge**: Multiple WebSocket streams coordination
+**Solution**:
+- Single asyncio event loop with multiple stream handlers
+- Shared state objects with thread-safe updates
+- Queue-based message processing for high-frequency data
+
+### 6.2 Latency Optimization
+
+**Data Processing Pipeline:**
 ```python
-from datetime import datetime, timezone
+# Minimize processing in WebSocket callback
+async def on_trade_update(self, trade_data):
+    # Quick data validation and queuing
+    if self.is_valid_trade(trade_data):
+        await self.trade_queue.put(trade_data)
 
+# Separate processing task
+async def process_trade_data(self):
+    while True:
+        trade_data = await self.trade_queue.get()
+        self.update_indicators(trade_data)  # Bulk processing
+        signal = self.check_signals()       # Signal generation
+        if signal:
+            await self.execute_trade(signal)
+```
+
+**Execution Optimization:**
+- Pre-calculate position sizes
+- Maintain WebSocket connection pools
+- Use connection keepalive
+- Implement order retry mechanisms
+
+### 6.3 Memory Management
+
+**Fixed-Size Buffers:**
+```python
+from collections import deque
+
+class FixedBuffer:
+    def __init__(self, size):
+        self.buffer = deque(maxlen=size)
+        self.size = size
+    
+    def add(self, value):
+        self.buffer.append(value)
+    
+    def is_full(self):
+        return len(self.buffer) == self.size
+```
+
+**Memory-Efficient VWAP:**
+```python
 class VWAPCalculator:
     def __init__(self):
         self.cumulative_pv = 0.0
         self.cumulative_volume = 0.0
-        self.last_reset_date = None
-        
-    def check_session_reset(self):
-        """매일 UTC 0시에 VWAP 리셋"""
-        current_date = datetime.now(timezone.utc).date()
-        if self.last_reset_date != current_date:
-            self.cumulative_pv = 0.0
-            self.cumulative_volume = 0.0
-            self.last_reset_date = current_date
-            return True
-        return False
+        self.last_reset = datetime.now()
+    
+    def update(self, price, volume):
+        self.cumulative_pv += price * volume
+        self.cumulative_volume += volume
+        return self.cumulative_pv / self.cumulative_volume if self.cumulative_volume > 0 else 0
 ```
 
-### 6.3 실시간 데이터 동기화
-여러 WebSocket 스트림의 데이터를 동기화하는 것이 핵심:
+### 6.4 Error Handling Approaches
 
+**Graceful Degradation:**
 ```python
-class FuturesVWAPStream:
-    def __init__(self):
-        self.latest_trade_price = None
-        self.latest_vwap = None
-        self.latest_adx = None
-        self.data_lock = asyncio.Lock()
+class StrategyState:
+    INITIALIZING = "initializing"
+    WARMING_UP = "warming_up"
+    ACTIVE = "active"
+    HALTED = "halted"
+    ERROR = "error"
+
+async def safe_strategy_execution(self):
+    try:
+        if self.state == StrategyState.ERROR:
+            await self.attempt_recovery()
+            
+        if not self.indicators_ready():
+            self.state = StrategyState.WARMING_UP
+            return
+            
+        signal = self.generate_signal()
+        if signal and self.state == StrategyState.ACTIVE:
+            await self.execute_signal(signal)
+            
+    except IndicatorError as e:
+        log.warning(f"Indicator calculation error: {e}")
+        # Continue with available indicators
+    except NetworkError as e:
+        log.error(f"Network error: {e}")
+        self.state = StrategyState.ERROR
+    except Exception as e:
+        log.error(f"Unexpected error: {e}")
+        self.state = StrategyState.ERROR
+```
+
+**Data Validation:**
+```python
+def validate_trade_data(self, trade_data):
+    required_fields = ['price', 'quantity', 'timestamp']
+    for field in required_fields:
+        if field not in trade_data:
+            raise ValueError(f"Missing required field: {field}")
+    
+    if trade_data['price'] <= 0 or trade_data['quantity'] <= 0:
+        raise ValueError("Invalid price or quantity")
+    
+    # Timestamp freshness check
+    age = time.time() - trade_data['timestamp'] / 1000
+    if age > 5:  # 5 seconds old
+        raise ValueError("Stale trade data")
+```
+
+## 7. Testing & Validation Strategy
+
+### 7.1 Backtesting Requirements
+
+**Historical Data Needs:**
+- Trade-by-trade data for accurate VWAP calculation
+- 1-minute OHLCV data for ADX calculation
+- Order book snapshots for realistic execution simulation
+- Minimum 3-6 months of data across different market conditions
+
+**Backtesting Framework:**
+```python
+class VWAPBacktester:
+    def __init__(self, start_date, end_date, initial_capital):
+        self.strategy = VWAPMeanReversionStrategy()
+        self.portfolio = Portfolio(initial_capital)
+        self.performance_metrics = PerformanceTracker()
+    
+    async def run_backtest(self, trade_data, kline_data):
+        for timestamp in self.get_timerange():
+            # Simulate real-time data feed
+            trades = self.get_trades_at_time(trade_data, timestamp)
+            klines = self.get_klines_at_time(kline_data, timestamp)
+            
+            # Update strategy indicators
+            self.strategy.update(trades, klines)
+            
+            # Generate and execute signals
+            signal = self.strategy.generate_signal()
+            if signal:
+                execution_result = self.simulate_execution(signal, timestamp)
+                self.portfolio.update(execution_result)
+            
+            # Update performance tracking
+            self.performance_metrics.update(self.portfolio.current_value, timestamp)
+    
+    def get_results(self):
+        return {
+            'total_return': self.portfolio.total_return,
+            'sharpe_ratio': self.performance_metrics.sharpe_ratio,
+            'max_drawdown': self.performance_metrics.max_drawdown,
+            'win_rate': self.performance_metrics.win_rate,
+            'profit_factor': self.performance_metrics.profit_factor
+        }
+```
+
+### 7.2 Performance Metrics to Track
+
+**Strategy Performance:**
+- Win Rate (target: ≥39.8%)
+- Profit Factor (gross profit / gross loss)
+- Average Trade Duration
+- Maximum Consecutive Losses
+- Return per Trade
+- Risk-Adjusted Returns (Sharpe Ratio)
+
+**Risk Metrics:**
+- Maximum Drawdown
+- Value at Risk (VaR)
+- Position Sizing Effectiveness
+- Volatility of Returns
+
+**Execution Quality:**
+- Order Fill Rates
+- Slippage Analysis
+- Latency Measurements
+- Market Impact Assessment
+
+### 7.3 Validation Approaches
+
+**Walk-Forward Analysis:**
+```python
+class WalkForwardValidator:
+    def __init__(self, train_period_days=90, test_period_days=30):
+        self.train_period = train_period_days
+        self.test_period = test_period_days
+    
+    def validate(self, data, start_date, end_date):
+        results = []
+        current_date = start_date
         
-    async def _trade_stream(self, bm):
-        async with bm.futures_trade_socket(self.symbol) as stream:
-            while True:
-                msg = await stream.recv()
-                async with self.data_lock:
-                    # 안전하게 데이터 업데이트
-                    self.latest_trade_price = float(msg['p'])
-                    # VWAP 계산...
+        while current_date < end_date:
+            # Define training and testing periods
+            train_start = current_date
+            train_end = train_start + timedelta(days=self.train_period)
+            test_start = train_end
+            test_end = test_start + timedelta(days=self.test_period)
+            
+            # Train strategy parameters
+            train_data = self.get_data_range(data, train_start, train_end)
+            optimal_params = self.optimize_parameters(train_data)
+            
+            # Test with optimized parameters
+            test_data = self.get_data_range(data, test_start, test_end)
+            performance = self.backtest_with_params(test_data, optimal_params)
+            
+            results.append({
+                'test_period': (test_start, test_end),
+                'performance': performance,
+                'parameters': optimal_params
+            })
+            
+            current_date = test_end
+        
+        return results
 ```
 
-## 7. 테스트 및 검증
+**Live Trading Validation:**
+- Paper trading mode with real market data
+- Small position size live testing
+- Performance comparison with backtesting results
+- Slippage and execution cost analysis
 
-### 7.1 기본 테스트 방법
-```bash
-# DRY_RUN 모드로 먼저 테스트
-export DRY_RUN=true
-python main.py
+**Stress Testing:**
+- High volatility period simulation
+- Market crash scenarios
+- Extended sideways market conditions
+- Network disruption handling
+
+### 7.4 Monitoring and Alerting
+
+**Real-time Monitoring Dashboard:**
+```python
+class StrategyMonitor:
+    def __init__(self):
+        self.metrics = {
+            'trades_today': 0,
+            'current_pnl': 0.0,
+            'win_rate_today': 0.0,
+            'current_drawdown': 0.0,
+            'indicator_health': True
+        }
+    
+    def update_metrics(self, trade_result):
+        # Update all relevant metrics
+        pass
+    
+    def check_alerts(self):
+        alerts = []
+        
+        # Performance alerts
+        if self.metrics['current_drawdown'] > 0.05:  # 5% drawdown
+            alerts.append("High drawdown detected")
+        
+        if self.metrics['win_rate_today'] < 0.3 and self.metrics['trades_today'] > 10:
+            alerts.append("Low win rate detected")
+        
+        # Technical alerts
+        if not self.metrics['indicator_health']:
+            alerts.append("Indicator calculation issues")
+        
+        return alerts
 ```
 
-### 7.2 성과 지표 모니터링
-- 승률: 최소 40% 이상 목표
-- 평균 거래 시간: VWAP 회귀 특성상 짧은 시간 내 청산
-- 손익비: 익절 0.6% vs 손절 0.3% = 2:1
-- ADX 필터 효과: 횡보장에서의 성과 vs 추세장 회피
-
-### 7.3 실제 운영 전 체크리스트
-1. **설정 확인**:
-   - SYMBOL: 거래할 심볼 설정
-   - SIZE_QUOTE: 거래 규모 설정  
-   - TESTNET: 테스트넷 여부
-
-2. **지표 준비 상태**:
-   - ADX 계산을 위한 최소 14개 캔들 데이터 확보
-   - VWAP 계산을 위한 거래 데이터 스트림 정상 작동
-
-3. **리스크 관리**:
-   - 최대 동시 포지션 수 제한
-   - 일일 최대 손실 한도 설정
-   - 네트워크 연결 끊김시 대응 방안
-
-이 가이드는 기존 OBI 스캘핑 봇 구조를 그대로 활용하면서 VWAP 평균 회귀 전략을 추가로 구현할 수 있도록 설계되었습니다. 핵심은 ADX로 시장 상태를 필터링하고, VWAP에서 이탈한 가격의 회귀를 노리는 것입니다.
+This comprehensive technical specification provides all the implementation details needed to develop the VWAP mean reversion strategy while integrating seamlessly with the existing trading bot architecture. The strategy maintains the core risk management principles while adding sophisticated market regime detection and volatility controls.
