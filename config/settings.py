@@ -9,7 +9,6 @@ class Settings(BaseSettings):
     # Dry run
     DRY_RUN: bool = False
 
-
     # 심볼 (ex: "BTCUSDT" 또는 "BTCUSDC_PERP")
     SYMBOL: str = "BTCUSDT"
 
@@ -25,18 +24,10 @@ class Settings(BaseSettings):
     QUOTE_ASSET: str = "USDT"      # "USDT" or "USDC"
     SIZE_QUOTE: float = 20        # ex: 20 USDT or 20 USDC
 
-    @property
-    def FUTURES_REST(self) -> str:
-        return "https://testnet.binancefuture.com" if self.TESTNET else "https://fapi.binance.com"
-
-    @property
-    def FUTURES_WS(self) -> str:
-        return "wss://fstream.binancefuture.com" if self.TESTNET else "wss://fstream.binance.com"
-
-
     model_config = {               # ← v2 방식의 설정
         "env_file": ".env",
         "env_file_encoding": "utf-8",
     }
 
 settings = Settings()
+print(settings)

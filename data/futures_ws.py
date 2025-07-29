@@ -1,5 +1,9 @@
-import aiohttp, asyncio, json
+import asyncio
+from binance import AsyncClient, BinanceSocketManager
+
 from config.settings import settings
+from utils.logger import log
+
 
 class FuturesDepthStream:
     def __init__(self, symbol: str):
@@ -8,17 +12,33 @@ class FuturesDepthStream:
 
     async def run(self):
         try:
-            url = f"{settings.FUTURES_WS}/ws/{self.symbol}@depth@100ms"
-            async with aiohttp.ClientSession() as session:
-                async with session.ws_connect(url) as ws:
-                    async for msg in ws:
-                        if msg.type == aiohttp.WSMsgType.TEXT:
-                            self.depth = json.loads(msg.data)
-                        else:
-                            break
+            # Create AsyncClient for futures
+            kwargs = {
+                "api_key": settings.BINANCE_API_KEY,
+                "api_secret": settings.BINANCE_SECRET,
+                "testnet": settings.TESTNET,
+            }
+            client = await AsyncClient.create(**kwargs)
+            
+            try:
+                bm = BinanceSocketManager(client)
+                # Use futures depth stream
+                async with bm.futures_depth_socket(self.symbol) as stream:
+                    while True:
+                        msg = await stream.recv()
+                        # Transform message to match original format expected by strategy
+                        # BinanceSocketManager returns {'bids': [...], 'asks': [...], ...}
+                        # but strategy expects {'b': [...], 'a': [...], ...}
+                        if 'bids' in msg and 'asks' in msg:
+                            self.depth = {
+                                'b': msg['bids'],
+                                'a': msg['asks']
+                            }
+            finally:
+                await client.close_connection()
         except asyncio.CancelledError:
-            print("FuturesDepthStream: cancelled")
+            log.info("FuturesDepthStream: cancelled")
             raise
         except Exception as e:
-            print(f"FuturesDepthStream error: {e}")
+            log.exception("FuturesDepthStream error")
             raise e

@@ -21,7 +21,7 @@ def _qty(usdt: float, price: float) -> str:
 
 async def place_limit_maker(side: str, price: float):
     """
-    futures post-only 지정가 주문
+    futures post-only 지정가 주문 (WebSocket API 사용)
     """
     qty_str = _qty(settings.SIZE_QUOTE, price)
 
@@ -38,7 +38,8 @@ async def place_limit_maker(side: str, price: float):
         }
 
     assert client, "AsyncClient가 주입되지 않았습니다."
-    order = await client.futures_create_order(
+    # WebSocket API를 사용한 futures 주문
+    order = await client.ws_futures_create_order(
         symbol=settings.SYMBOL,
         side=side,
         type="LIMIT",           # 지정가
@@ -53,13 +54,14 @@ async def place_limit_maker(side: str, price: float):
     return order
 
 async def cancel_order(order_id: int):
-    """주문 취소 (DRY_RUN 지원)"""
+    """주문 취소 (WebSocket API 사용, DRY_RUN 지원)"""
     if settings.DRY_RUN:
         log.info(f"[DRY RUN] Cancel orderId={order_id}")
         return {"orderId": order_id, "status": "CANCELED", "simulated": True}
 
     assert client, "AsyncClient not injected"
-    resp = await client.futures_cancel_order(symbol=settings.SYMBOL, orderId=order_id)
+    # WebSocket API를 사용한 주문 취소
+    resp = await client.ws_futures_cancel_order(symbol=settings.SYMBOL, orderId=order_id)
     log.info(f"Canceled order {order_id}: status={resp.get('status')}")
     return resp
 
