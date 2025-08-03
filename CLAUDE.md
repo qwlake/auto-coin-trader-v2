@@ -8,6 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Don't write any code or files before user requested it.
 - Complex requests should be broken down into smaller tasks.
 - Thinkable requests should be preprocessed using gemini(e.g. gemini -p {prompt}).
+- Manage strategies using the `STRATEGY.md` file.
 
 ## Project Overview
 

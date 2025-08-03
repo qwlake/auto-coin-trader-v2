@@ -1,7 +1,7 @@
 import asyncio
 from asyncio import tasks as _tasks
 
-from data.futures_ws import FuturesDepthStream
+from data.futures_ws import FuturesDepthStream, EnhancedFuturesStream
 from executor.position_manager import PositionManager
 
 # ── monkey-patch for PyCharm debug ────────────────────────
@@ -20,6 +20,7 @@ import signal
 from config.settings import settings
 from utils.logger import log
 from strategy.obi_scalper import signal as obi_signal
+from strategy.vwap_mean_reversion import VWAPMeanReversionStrategy
 from executor.order_executor import place_limit_maker, inject_client
 from binance import AsyncClient
 
@@ -35,18 +36,70 @@ async def runner():
     client = await AsyncClient.create(**kwargs)
     inject_client(client)
 
-    # symbols = await client.get_all_tickers()
-    # log.info(f"all tickers: {symbols}")
-
     # 2) PositionManager 초기화
     pos_manager = PositionManager(client)
     await pos_manager.init()
 
-    # 3) FuturesDepthStream 초기화
+    # 3) Strategy initialization based on configuration
+    if settings.STRATEGY_TYPE == "VWAP":
+        log.info("[Main] Starting VWAP Mean Reversion Strategy")
+        await run_vwap_strategy(pos_manager)
+    else:
+        log.info("[Main] Starting OBI Scalping Strategy")
+        await run_obi_strategy(pos_manager)
+
+
+async def run_vwap_strategy(pos_manager: PositionManager):
+    """Run VWAP Mean Reversion Strategy"""
+    strategy = VWAPMeanReversionStrategy()
+    stream = EnhancedFuturesStream(settings.SYMBOL, strategy)
+    ws_task = asyncio.create_task(stream.run(), name="EnhancedStream")
+    
+    try:
+        while True:
+            # Wait for strategy warmup
+            if not strategy.is_ready():
+                await asyncio.sleep(1.0)
+                continue
+            
+            # Generate signal using VWAP strategy
+            sig = strategy.signal()
+            
+            if sig in ["LONG", "SHORT"]:
+                # Get current VWAP for context
+                indicator_data = strategy.get_indicator_data()
+                current_price = indicator_data.get('current_price', 0)
+                current_vwap = indicator_data.get('vwap', 0)
+                
+                if current_price > 0:
+                    # Place limit order at current price
+                    order_side = "BUY" if sig == "LONG" else "SELL"
+                    order = await place_limit_maker(order_side, current_price)
+                    
+                    # Register with position manager (enhanced with VWAP context)
+                    await pos_manager.register_order(
+                        order, 
+                        strategy_type="VWAP", 
+                        vwap_at_entry=current_vwap
+                    )
+                    
+                    # Enhanced logging with VWAP context
+                    log.info(f"[VWAP Strategy] {sig} order placed: price={current_price:.2f}, vwap={current_vwap:.2f}")
+            
+            await asyncio.sleep(0.2)  # Same cycle time as OBI strategy
+            
+    except asyncio.CancelledError:
+        log.info('VWAP strategy cancelled, shutting down...')
+    finally:
+        ws_task.cancel()
+        await pos_manager.close()
+
+
+async def run_obi_strategy(pos_manager: PositionManager):
+    """Run OBI Scalping Strategy (existing implementation)"""
     stream = FuturesDepthStream(settings.SYMBOL)
     ws_task = asyncio.create_task(stream.run(), name="DepthStream")
-
-    # 4) OBI 스캘핑
+    
     try:
         while True:
             snap = stream.depth
@@ -58,17 +111,16 @@ async def runner():
 
                 if sig == "BUY":
                     order = await place_limit_maker("BUY", mid)
-                    await pos_manager.register_order(order)
+                    await pos_manager.register_order(order, strategy_type="OBI")
                 elif sig == "SELL":
                     order = await place_limit_maker("SELL", mid)
-                    await pos_manager.register_order(order)
+                    await pos_manager.register_order(order, strategy_type="OBI")
 
             await asyncio.sleep(0.2)
     except asyncio.CancelledError:
-        log.info('Runner cancelled, shutting down...')
+        log.info('OBI strategy cancelled, shutting down...')
     finally:
         ws_task.cancel()
-        await client.close_connection()
         await pos_manager.close()
 
 
