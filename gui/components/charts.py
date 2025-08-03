@@ -26,18 +26,32 @@ def create_price_chart(state):
         np.random.seed(seed)
         
         for i in range(60):
-            # 시간에 기반한 일관된 패턴 생성
-            time_factor = np.sin(i * 0.1) * 0.0005  # 주기적 패턴
+            # 더 자연스러운 가격 변동 패턴 생성
+            time_factor = np.sin(i * 0.05) * 0.0002  # 더 부드러운 주기적 패턴
+            trend_factor = (i - 30) * 0.00002  # 약간의 트렌드 요소
+            
             # scale이 항상 양수가 되도록 abs() 사용
-            scale = abs(base_price * 0.0005)
+            scale = abs(base_price * 0.0003)  # 변동성을 줄임
             if scale == 0:
-                scale = 1.0  # 최소값 설정
+                scale = base_price * 0.0001  # 최소값을 비율로 설정
             random_factor = np.random.normal(0, scale)  # 작은 랜덤 변동
-            change = (time_factor * base_price) + random_factor
-            price = base_price + change
+            
+            # 총 변화량 계산 (더 작은 변동)
+            total_change = (time_factor + trend_factor) * base_price + random_factor
+            price = base_price + total_change
+            
             # 가격이 음수가 되지 않도록 보정
             if price <= 0:
-                price = base_price * 0.99
+                price = base_price * 0.999
+            
+            # 현재 가격 주변에서 크게 벗어나지 않도록 제한
+            max_deviation = state.current_price * 0.003  # 0.3% 이내로 제한
+            if abs(price - state.current_price) > max_deviation:
+                if price > state.current_price:
+                    price = state.current_price + max_deviation
+                else:
+                    price = state.current_price - max_deviation
+            
             prices.append(price)
             base_price = price
         
@@ -142,8 +156,16 @@ def create_price_chart(state):
         # X축 설정
         fig.update_xaxes(title_text="시간", row=2, col=1)
         
-        # Y축 설정
-        fig.update_yaxes(title_text="가격 ($)", row=1, col=1)
+        # Y축 설정 - 가격 차트의 Y축 범위를 현재 가격 주변으로 제한
+        price_center = state.current_price
+        price_range = max(abs(max(prices) - price_center), abs(price_center - min(prices)))
+        y_margin = price_range * 0.1  # 10% 여백
+        
+        fig.update_yaxes(
+            title_text="가격 ($)", 
+            row=1, col=1,
+            range=[price_center - price_range - y_margin, price_center + price_range + y_margin]
+        )
         fig.update_yaxes(title_text="거래량", row=2, col=1)
         
         return fig
