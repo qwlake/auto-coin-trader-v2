@@ -4,12 +4,13 @@ from .base_settings import BaseSettings
 from .obi_settings import OBISettings  
 from .vwap_settings import VWAPSettings
 
-# .env 파일 로드
-load_dotenv()
+# .env와 .apikey 파일 로드
+load_dotenv()  # .env 로드
+load_dotenv(".apikey")  # .apikey 로드
 
 def get_settings():
     """전략 타입에 따라 적절한 설정을 반환"""
-    # 환경변수에서 전략 타입 확인 (기본값: OBI)
+    # .env 파일에서 전략 타입 확인 (기본값: OBI)
     strategy_type = os.getenv("STRATEGY_TYPE", "OBI").upper()
     
     if strategy_type == "VWAP":

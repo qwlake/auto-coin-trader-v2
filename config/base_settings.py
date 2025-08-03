@@ -18,6 +18,6 @@ class BaseSettings(BaseSettings):
     STRATEGY_TYPE: str = "OBI"     # "OBI" or "VWAP"
     
     model_config = {
-        "env_file": ".env",
+        "env_file": [".env", ".apikey"],  # .env와 .apikey 파일 모두 로드
         "env_file_encoding": "utf-8",
     }
