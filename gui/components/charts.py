@@ -8,130 +8,145 @@ import numpy as np
 def create_price_chart(state):
     """실시간 가격 차트 생성"""
     
-    if state.current_price <= 0:
-        return None
-    
-    # 시뮬레이션을 위한 샘플 데이터 생성 (실제로는 실시간 데이터 사용)
-    now = datetime.now()
-    times = [now - timedelta(minutes=i) for i in range(60, 0, -1)]
-    
-    # 현재 가격 기준으로 일관된 가격 데이터 생성 (고정 시드 사용)
-    base_price = state.current_price
-    prices = []
-    
-    # 시간에 기반한 고정 시드 사용 (1분 단위로 변경)
-    current_minute = now.replace(second=0, microsecond=0)
-    seed = int(current_minute.timestamp() / 60)  # 분 단위로 시드 변경
-    np.random.seed(seed)
-    
-    for i in range(60):
-        # 시간에 기반한 일관된 패턴 생성
-        time_factor = np.sin(i * 0.1) * 0.0005  # 주기적 패턴
-        random_factor = np.random.normal(0, base_price * 0.0005)  # 작은 랜덤 변동
-        change = (time_factor + random_factor) * base_price
-        price = base_price + change
-        prices.append(price)
-        base_price = price
-    
-    # 마지막은 현재 가격으로 설정
-    prices[-1] = state.current_price
-    
-    # 차트 생성
-    fig = make_subplots(
-        rows=2, cols=1,
-        subplot_titles=("가격 차트", "거래량"),
-        vertical_spacing=0.1,
-        row_heights=[0.7, 0.3]
-    )
-    
-    # 가격 라인
-    fig.add_trace(
-        go.Scatter(
-            x=times,
-            y=prices,
-            mode='lines',
-            name='가격',
-            line=dict(color='#2E86AB', width=2)
-        ),
-        row=1, col=1
-    )
-    
-    # VWAP 전략의 경우 추가 지표 표시
-    if state.strategy_type == "VWAP" and state.vwap > 0:
-        # VWAP 라인
-        vwap_line = [state.vwap] * len(times)
+    try:
+        if state.current_price <= 0:
+            return None
+        
+        # 시뮬레이션을 위한 샘플 데이터 생성 (실제로는 실시간 데이터 사용)
+        now = datetime.now()
+        times = [now - timedelta(minutes=i) for i in range(60, 0, -1)]
+        
+        # 현재 가격 기준으로 일관된 가격 데이터 생성 (고정 시드 사용)
+        base_price = state.current_price
+        prices = []
+        
+        # 시간에 기반한 고정 시드 사용 (1분 단위로 변경)
+        current_minute = now.replace(second=0, microsecond=0)
+        seed = int(current_minute.timestamp() / 60)  # 분 단위로 시드 변경
+        np.random.seed(seed)
+        
+        for i in range(60):
+            # 시간에 기반한 일관된 패턴 생성
+            time_factor = np.sin(i * 0.1) * 0.0005  # 주기적 패턴
+            random_factor = np.random.normal(0, base_price * 0.0005)  # 작은 랜덤 변동
+            change = (time_factor + random_factor) * base_price
+            price = base_price + change
+            prices.append(price)
+            base_price = price
+        
+        # 마지막은 현재 가격으로 설정
+        prices[-1] = state.current_price
+        
+        # 데이터 검증
+        if any(p <= 0 for p in prices):
+            print(f"Warning: Found non-positive prices: {[p for p in prices if p <= 0]}")
+            # 음수나 0인 가격을 현재 가격으로 대체
+            prices = [max(p, state.current_price * 0.99) for p in prices]
+        
+        # 차트 생성
+        fig = make_subplots(
+            rows=2, cols=1,
+            subplot_titles=("가격 차트", "거래량"),
+            vertical_spacing=0.1,
+            row_heights=[0.7, 0.3]
+        )
+        
+        # 가격 라인
         fig.add_trace(
             go.Scatter(
                 x=times,
-                y=vwap_line,
+                y=prices,
                 mode='lines',
-                name='VWAP',
-                line=dict(color='#F18F01', width=2, dash='dash')
+                name='가격',
+                line=dict(color='#2E86AB', width=2)
             ),
             row=1, col=1
         )
         
-        # 상단/하단 밴드
-        if state.upper_band > 0 and state.lower_band > 0:
-            upper_band_line = [state.upper_band] * len(times)
-            lower_band_line = [state.lower_band] * len(times)
-            
+        # VWAP 전략의 경우 추가 지표 표시
+        if state.strategy_type == "VWAP" and hasattr(state, 'vwap') and state.vwap > 0:
+            # VWAP 라인
+            vwap_line = [state.vwap] * len(times)
             fig.add_trace(
                 go.Scatter(
                     x=times,
-                    y=upper_band_line,
+                    y=vwap_line,
                     mode='lines',
-                    name='상단밴드',
-                    line=dict(color='#E71D36', width=1, dash='dot'),
-                    opacity=0.7
+                    name='VWAP',
+                    line=dict(color='#F18F01', width=2, dash='dash')
                 ),
                 row=1, col=1
             )
             
-            fig.add_trace(
-                go.Scatter(
-                    x=times,
-                    y=lower_band_line,
-                    mode='lines',
-                    name='하단밴드',
-                    line=dict(color='#2D9D32', width=1, dash='dot'),
-                    opacity=0.7,
-                    fill='tonexty',
-                    fillcolor='rgba(45, 157, 50, 0.1)'
-                ),
-                row=1, col=1
-            )
-    
-    # 일관된 거래량 데이터 (같은 시드 사용)
-    volumes = np.random.uniform(100, 1000, len(times))
-    
-    fig.add_trace(
-        go.Bar(
-            x=times,
-            y=volumes,
-            name='거래량',
-            marker_color='rgba(46, 134, 171, 0.6)'
-        ),
-        row=2, col=1
-    )
-    
-    # 레이아웃 설정
-    fig.update_layout(
-        height=600,
-        title_text=f"{state.strategy_type} 전략 - 실시간 차트",
-        showlegend=True,
-        xaxis_rangeslider_visible=False,
-        template="plotly_white"
-    )
-    
-    # X축 설정
-    fig.update_xaxes(title_text="시간", row=2, col=1)
-    
-    # Y축 설정
-    fig.update_yaxes(title_text="가격 ($)", row=1, col=1)
-    fig.update_yaxes(title_text="거래량", row=2, col=1)
-    
-    return fig
+            # 상단/하단 밴드
+            if (hasattr(state, 'upper_band') and hasattr(state, 'lower_band') and 
+                state.upper_band > 0 and state.lower_band > 0):
+                upper_band_line = [state.upper_band] * len(times)
+                lower_band_line = [state.lower_band] * len(times)
+                
+                fig.add_trace(
+                    go.Scatter(
+                        x=times,
+                        y=upper_band_line,
+                        mode='lines',
+                        name='상단밴드',
+                        line=dict(color='#E71D36', width=1, dash='dot'),
+                        opacity=0.7
+                    ),
+                    row=1, col=1
+                )
+                
+                fig.add_trace(
+                    go.Scatter(
+                        x=times,
+                        y=lower_band_line,
+                        mode='lines',
+                        name='하단밴드',
+                        line=dict(color='#2D9D32', width=1, dash='dot'),
+                        opacity=0.7,
+                        fill='tonexty',
+                        fillcolor='rgba(45, 157, 50, 0.1)'
+                    ),
+                    row=1, col=1
+                )
+        
+        # 일관된 거래량 데이터 (같은 시드 사용)
+        volumes = np.random.uniform(100, 1000, len(times))
+        
+        fig.add_trace(
+            go.Bar(
+                x=times,
+                y=volumes,
+                name='거래량',
+                marker_color='rgba(46, 134, 171, 0.6)'
+            ),
+            row=2, col=1
+        )
+        
+        # 레이아웃 설정
+        fig.update_layout(
+            height=600,
+            title_text=f"{state.strategy_type} 전략 - 실시간 차트",
+            showlegend=True,
+            xaxis_rangeslider_visible=False,
+            template="plotly_white"
+        )
+        
+        # X축 설정
+        fig.update_xaxes(title_text="시간", row=2, col=1)
+        
+        # Y축 설정
+        fig.update_yaxes(title_text="가격 ($)", row=1, col=1)
+        fig.update_yaxes(title_text="거래량", row=2, col=1)
+        
+        return fig
+        
+    except Exception as e:
+        print(f"Error creating price chart: {e}")
+        print(f"State data: current_price={getattr(state, 'current_price', 'N/A')}, strategy_type={getattr(state, 'strategy_type', 'N/A')}")
+        import traceback
+        traceback.print_exc()
+        return None
 
 def create_pnl_chart(closed_positions):
     """PnL 누적 차트 생성"""
