@@ -134,25 +134,30 @@ class VWAPBandCalculator:
     def update(self, current_price: float, vwap: float) -> Tuple[float, float]:
         """Update bands with new price and VWAP data"""
         if vwap > 0 and current_price > 0:
-            deviation = current_price - vwap
-            self.price_deviations.append(deviation)
+            # Calculate percentage deviation from VWAP instead of absolute deviation
+            pct_deviation = (current_price - vwap) / vwap
+            self.price_deviations.append(pct_deviation)
             
             if len(self.price_deviations) >= 2:
-                # Calculate standard deviation of price deviations from VWAP
+                # Calculate standard deviation of percentage deviations from VWAP
                 mean_dev = sum(self.price_deviations) / len(self.price_deviations)
                 variance = sum((d - mean_dev) ** 2 for d in self.price_deviations) / len(self.price_deviations)
                 self.current_std = math.sqrt(variance)
+                
+                # Ensure minimum standard deviation for practical trading (0.1% minimum)
+                self.current_std = max(self.current_std, 0.001)
         
-        # Calculate upper and lower bands
-        upper_band = vwap + (self.current_std * self.multiplier)
-        lower_band = vwap - (self.current_std * self.multiplier)
+        # Calculate upper and lower bands using percentage-based standard deviation
+        # Convert back to absolute prices
+        upper_band = vwap * (1 + (self.current_std * self.multiplier))
+        lower_band = vwap * (1 - (self.current_std * self.multiplier))
         
         return upper_band, lower_band
     
     def get_bands(self, vwap: float) -> Tuple[float, float]:
         """Get current upper and lower bands"""
-        upper_band = vwap + (self.current_std * self.multiplier)
-        lower_band = vwap - (self.current_std * self.multiplier)
+        upper_band = vwap * (1 + (self.current_std * self.multiplier))
+        lower_band = vwap * (1 - (self.current_std * self.multiplier))
         return upper_band, lower_band
 
 
