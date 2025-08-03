@@ -28,9 +28,16 @@ def create_price_chart(state):
         for i in range(60):
             # 시간에 기반한 일관된 패턴 생성
             time_factor = np.sin(i * 0.1) * 0.0005  # 주기적 패턴
-            random_factor = np.random.normal(0, base_price * 0.0005)  # 작은 랜덤 변동
-            change = (time_factor + random_factor) * base_price
+            # scale이 항상 양수가 되도록 abs() 사용
+            scale = abs(base_price * 0.0005)
+            if scale == 0:
+                scale = 1.0  # 최소값 설정
+            random_factor = np.random.normal(0, scale)  # 작은 랜덤 변동
+            change = (time_factor * base_price) + random_factor
             price = base_price + change
+            # 가격이 음수가 되지 않도록 보정
+            if price <= 0:
+                price = base_price * 0.99
             prices.append(price)
             base_price = price
         

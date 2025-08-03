@@ -38,14 +38,28 @@ class DataBroker:
         self.data_file.parent.mkdir(exist_ok=True)
         self._lock = threading.Lock()
         
-        # 초기 상태
-        self._state = TradingState(
-            timestamp=time.time(),
-            strategy_type="OBI",
-            current_price=0.0
-        )
-        
-        self._save_state()
+        # 기존 파일이 있으면 로드, 없으면 초기 상태 생성
+        if self.data_file.exists():
+            try:
+                with open(self.data_file, 'r') as f:
+                    data = json.load(f)
+                    self._state = TradingState(**data)
+            except (json.JSONDecodeError, TypeError):
+                # 파일이 손상되었으면 초기 상태 생성
+                self._state = TradingState(
+                    timestamp=time.time(),
+                    strategy_type="OBI",
+                    current_price=0.0
+                )
+                self._save_state()
+        else:
+            # 파일이 없으면 초기 상태 생성
+            self._state = TradingState(
+                timestamp=time.time(),
+                strategy_type="OBI",
+                current_price=0.0
+            )
+            self._save_state()
     
     def update_state(self, **kwargs):
         """상태 업데이트"""
