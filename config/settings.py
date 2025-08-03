@@ -1,7 +1,11 @@
 import os
+from dotenv import load_dotenv
 from .base_settings import BaseSettings
 from .obi_settings import OBISettings  
 from .vwap_settings import VWAPSettings
+
+# .env 파일 로드
+load_dotenv()
 
 def get_settings():
     """전략 타입에 따라 적절한 설정을 반환"""

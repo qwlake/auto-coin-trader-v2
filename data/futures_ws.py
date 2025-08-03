@@ -149,6 +149,15 @@ class EnhancedFuturesStream:
                         
                         # Check for session reset
                         self.strategy.check_session_reset()
+                    
+                    # Update GUI data every few updates (to avoid overwhelming)
+                    if hasattr(self, '_gui_update_counter'):
+                        self._gui_update_counter += 1
+                    else:
+                        self._gui_update_counter = 1
+                    
+                    if self._gui_update_counter % 10 == 0:  # Update every 10 trades
+                        self.update_gui_data()
                         
         except asyncio.CancelledError:
             log.debug("Trade stream cancelled")
@@ -193,3 +202,46 @@ class EnhancedFuturesStream:
                 'current_price': self.current_price,
                 'depth_available': self.depth is not None
             }
+    
+    def update_gui_data(self):
+        """GUI 데이터 브로커 업데이트"""
+        try:
+            # GUI 데이터 브로커가 있는 경우에만 업데이트
+            try:
+                from gui.data_broker import data_broker
+                
+                # 현재 가격 업데이트
+                data_broker.update_price(self.current_price)
+                
+                # 전략별 지표 업데이트
+                if self.strategy:
+                    indicator_data = self.strategy.get_indicator_data()
+                    
+                    # VWAP 전략 지표
+                    if hasattr(self.strategy, 'vwap_calc'):
+                        vwap = indicator_data.get('vwap', 0)
+                        upper_band = indicator_data.get('upper_band', 0)
+                        lower_band = indicator_data.get('lower_band', 0)
+                        adx = indicator_data.get('adx', 0)
+                        
+                        data_broker.update_indicators(
+                            vwap=vwap,
+                            upper_band=upper_band,
+                            lower_band=lower_band,
+                            adx=adx
+                        )
+                        
+                        # 변동성 중단 상태
+                        is_halted = indicator_data.get('is_halted', False)
+                        data_broker.set_halt_status(is_halted)
+                    
+                    # 전략 타입 업데이트
+                    from config.settings import settings
+                    data_broker.update_state(strategy_type=settings.STRATEGY_TYPE)
+                        
+            except ImportError:
+                # GUI 모듈이 없는 경우 무시
+                pass
+        except Exception as e:
+            # GUI 업데이트 실패는 로그만 남기고 메인 로직에 영향 없음
+            pass

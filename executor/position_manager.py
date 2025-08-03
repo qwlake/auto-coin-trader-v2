@@ -4,6 +4,7 @@ from typing import Dict, List, Optional, Tuple
 from config.settings import settings
 from utils.logger import log
 from binance import AsyncClient
+from datetime import datetime
 
 
 class PositionManager:
@@ -53,6 +54,7 @@ class PositionManager:
                     side TEXT NOT NULL,
                     entry_price REAL NOT NULL,
                     quantity REAL NOT NULL,
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
                     strategy_type TEXT DEFAULT 'OBI',
                     vwap_at_entry REAL DEFAULT NULL
                 )
@@ -83,6 +85,7 @@ class PositionManager:
                 await db.execute("ALTER TABLE pending_orders ADD COLUMN vwap_at_entry REAL DEFAULT NULL")
                 await db.execute("ALTER TABLE active_positions ADD COLUMN strategy_type TEXT DEFAULT 'OBI'")
                 await db.execute("ALTER TABLE active_positions ADD COLUMN vwap_at_entry REAL DEFAULT NULL")
+                await db.execute("ALTER TABLE active_positions ADD COLUMN timestamp DATETIME DEFAULT CURRENT_TIMESTAMP")
                 await db.execute("ALTER TABLE closed_positions ADD COLUMN strategy_type TEXT DEFAULT 'OBI'")
                 await db.execute("ALTER TABLE closed_positions ADD COLUMN vwap_at_entry REAL DEFAULT NULL")
                 await db.execute("ALTER TABLE closed_positions ADD COLUMN exit_reason TEXT DEFAULT 'TP_SL'")
@@ -252,6 +255,9 @@ class PositionManager:
                     row = await cursor.fetchone()
                     total_pnl = row[0] or 0.0
                 log.info(f"[PositionManager] Total closed PnL so far = {total_pnl:.6f}")
+                
+                # GUI 데이터 업데이트
+                await self.update_gui_data()
 
                 await asyncio.sleep(1.0)  # 1초마다 체크
             except asyncio.CancelledError:
@@ -295,6 +301,73 @@ class PositionManager:
             return (exit_price - entry_price) * quantity
         else:  # SELL
             return (entry_price - exit_price) * quantity
+
+    async def get_portfolio_stats(self) -> Dict:
+        """GUI용 포트폴리오 통계 조회"""
+        try:
+            async with aiosqlite.connect(self.db_path) as db:
+                # 활성 포지션 수
+                cursor = await db.execute("SELECT COUNT(*) FROM active_positions")
+                active_count = (await cursor.fetchone())[0]
+                
+                # 오늘의 통계
+                today = datetime.now().strftime("%Y-%m-%d")
+                cursor = await db.execute("""
+                    SELECT 
+                        COUNT(*) as total_trades,
+                        SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) as winning_trades,
+                        SUM(pnl) as total_pnl,
+                        AVG(pnl) as avg_pnl
+                    FROM closed_positions
+                    WHERE DATE(timestamp) = ?
+                """, (today,))
+                
+                row = await cursor.fetchone()
+                if row and row[0] > 0:
+                    return {
+                        'active_positions': active_count,
+                        'total_trades': row[0],
+                        'winning_trades': row[1],
+                        'win_rate': (row[1] / row[0]) * 100 if row[0] > 0 else 0,
+                        'total_pnl': row[2] or 0,
+                        'daily_pnl': row[2] or 0,
+                        'avg_pnl': row[3] or 0
+                    }
+                else:
+                    return {
+                        'active_positions': active_count,
+                        'total_trades': 0,
+                        'winning_trades': 0,
+                        'win_rate': 0,
+                        'total_pnl': 0,
+                        'daily_pnl': 0,
+                        'avg_pnl': 0
+                    }
+        except Exception as e:
+            log.error(f"Error getting portfolio stats: {e}")
+            return {
+                'active_positions': 0,
+                'total_trades': 0,
+                'winning_trades': 0,
+                'win_rate': 0,
+                'total_pnl': 0,
+                'daily_pnl': 0,
+                'avg_pnl': 0
+            }
+    
+    async def update_gui_data(self):
+        """GUI 데이터 브로커 업데이트"""
+        try:
+            # GUI 데이터 브로커가 있는 경우에만 업데이트
+            try:
+                from gui.data_broker import data_broker
+                stats = await self.get_portfolio_stats()
+                data_broker.update_portfolio(**stats)
+            except ImportError:
+                # GUI 모듈이 없는 경우 무시
+                pass
+        except Exception as e:
+            log.debug(f"GUI update failed: {e}")
 
     async def close(self):
         """

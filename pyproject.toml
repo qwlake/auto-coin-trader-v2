@@ -13,6 +13,12 @@ dependencies = [
     "requests (>=2.32.4,<3.0.0)",
     "python-dotenv (>=1.1.1,<2.0.0)",
     "ujson (>=5.10.0,<6.0.0)",
+    "streamlit (>=1.28.0,<2.0.0)",
+    "plotly (>=5.17.0,<6.0.0)",
+    "pandas (>=2.1.0,<3.0.0)",
+    "numpy (>=1.24.0,<2.0.0)",
+    "watchdog>=6.0.0",
+    "pydantic-settings>=2.10.1",
 ]
 
 [tool.uv]
