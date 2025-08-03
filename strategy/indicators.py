@@ -20,6 +20,7 @@ class VWAPCalculator:
         # Store trades with timestamps for rolling window calculation
         self.trades = deque()  # (timestamp, price, volume, pv) tuples
         self.current_vwap: float = 0.0
+        self.last_reset: datetime = datetime.now()
         
     def update(self, price: float, volume: float) -> float:
         """Update VWAP with new trade data"""
@@ -65,6 +66,7 @@ class VWAPCalculator:
         """Reset VWAP calculator (clear all trades)"""
         self.trades.clear()
         self.current_vwap = 0.0
+        self.last_reset = datetime.now()
 
 
 class ADXCalculator:
