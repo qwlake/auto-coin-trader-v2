@@ -26,7 +26,7 @@ class VWAPMeanReversionStrategy:
     
     def __init__(self):
         # Initialize all indicators
-        self.vwap_calc = VWAPCalculator()
+        self.vwap_calc = VWAPCalculator(window_minutes=settings.VWAP_WINDOW_MINUTES)
         self.adx_calc = ADXCalculator(period=settings.ADX_PERIOD)
         self.band_calc = VWAPBandCalculator(
             window_size=settings.VWAP_STDDEV_PERIOD,

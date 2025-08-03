@@ -9,37 +9,62 @@ class VWAPCalculator:
     """
     Volume Weighted Average Price Calculator
     
-    Calculates VWAP using incremental updates: VWAP = Σ(Price × Volume) / Σ(Volume)
-    Supports session reset functionality for daily VWAP calculations.
+    Calculates VWAP using a rolling time window: VWAP = Σ(Price × Volume) / Σ(Volume)
+    over the specified time window (default: 5 minutes)
     """
     
-    def __init__(self):
-        self.cumulative_pv: float = 0.0  # Price * Volume sum
-        self.cumulative_volume: float = 0.0  # Volume sum
-        self.session_start: Optional[datetime] = None
-        self.last_reset: datetime = datetime.utcnow()
-    
+    def __init__(self, window_minutes: int = 5):
+        self.window_minutes = window_minutes
+        self.window_seconds = window_minutes * 60
+        
+        # Store trades with timestamps for rolling window calculation
+        self.trades = deque()  # (timestamp, price, volume, pv) tuples
+        self.current_vwap: float = 0.0
+        
     def update(self, price: float, volume: float) -> float:
         """Update VWAP with new trade data"""
         if price <= 0 or volume <= 0:
-            return self.get_vwap()
+            return self.current_vwap
         
-        self.cumulative_pv += price * volume
-        self.cumulative_volume += volume
-        return self.get_vwap()
+        current_time = time.time()
+        pv = price * volume
+        
+        # Add new trade
+        self.trades.append((current_time, price, volume, pv))
+        
+        # Remove trades outside the window
+        cutoff_time = current_time - self.window_seconds
+        while self.trades and self.trades[0][0] < cutoff_time:
+            self.trades.popleft()
+        
+        # Calculate VWAP
+        self.current_vwap = self._calculate_vwap()
+        return self.current_vwap
+    
+    def _calculate_vwap(self) -> float:
+        """Calculate VWAP from trades in the current window"""
+        if not self.trades:
+            return 0.0
+            
+        total_pv = sum(trade[3] for trade in self.trades)  # Sum of price * volume
+        total_volume = sum(trade[2] for trade in self.trades)  # Sum of volume
+        
+        if total_volume > 0:
+            return total_pv / total_volume
+        return 0.0
     
     def get_vwap(self) -> float:
         """Get current VWAP value"""
-        if self.cumulative_volume > 0:
-            return self.cumulative_pv / self.cumulative_volume
-        return 0.0
+        return self.current_vwap
+    
+    def get_trade_count(self) -> int:
+        """Get number of trades in current window"""
+        return len(self.trades)
     
     def reset_session(self):
-        """Reset VWAP for new trading session"""
-        self.cumulative_pv = 0.0
-        self.cumulative_volume = 0.0
-        self.last_reset = datetime.utcnow()
-        self.session_start = self.last_reset
+        """Reset VWAP calculator (clear all trades)"""
+        self.trades.clear()
+        self.current_vwap = 0.0
 
 
 class ADXCalculator:

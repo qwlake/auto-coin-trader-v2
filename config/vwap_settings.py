@@ -3,7 +3,8 @@ from .base_settings import BaseSettings
 class VWAPSettings(BaseSettings):
     """VWAP Mean Reversion 전략 설정"""
     
-    # VWAP 전략 파라미터
+    # VWAP 계산 파라미터
+    VWAP_WINDOW_MINUTES: int = 5          # VWAP 계산 윈도우 (분)
     VWAP_BAND_MULTIPLIER: float = 1.5     # 표준편차 밴드 배수
     VWAP_STDDEV_PERIOD: int = 20          # 표준편차 계산 기간
     VWAP_PROFIT_TARGET: float = 0.006     # 0.6% 익절

@@ -12,51 +12,8 @@ def create_price_chart(state):
         if state.current_price <= 0:
             return None
         
-        # 시뮬레이션을 위한 샘플 데이터 생성 (실제로는 실시간 데이터 사용)
-        now = datetime.now()
-        times = [now - timedelta(minutes=i) for i in range(60, 0, -1)]
-        
-        # 현재 가격 기준으로 일관된 가격 데이터 생성 (고정 시드 사용)
-        base_price = state.current_price
-        prices = []
-        
-        # 시간에 기반한 고정 시드 사용 (1분 단위로 변경)
-        current_minute = now.replace(second=0, microsecond=0)
-        seed = int(current_minute.timestamp() / 60)  # 분 단위로 시드 변경
-        np.random.seed(seed)
-        
-        for i in range(60):
-            # 더 자연스러운 가격 변동 패턴 생성
-            time_factor = np.sin(i * 0.05) * 0.0002  # 더 부드러운 주기적 패턴
-            trend_factor = (i - 30) * 0.00002  # 약간의 트렌드 요소
-            
-            # scale이 항상 양수가 되도록 abs() 사용
-            scale = abs(base_price * 0.0003)  # 변동성을 줄임
-            if scale == 0:
-                scale = base_price * 0.0001  # 최소값을 비율로 설정
-            random_factor = np.random.normal(0, scale)  # 작은 랜덤 변동
-            
-            # 총 변화량 계산 (더 작은 변동)
-            total_change = (time_factor + trend_factor) * base_price + random_factor
-            price = base_price + total_change
-            
-            # 가격이 음수가 되지 않도록 보정
-            if price <= 0:
-                price = base_price * 0.999
-            
-            # 현재 가격 주변에서 크게 벗어나지 않도록 제한
-            max_deviation = state.current_price * 0.003  # 0.3% 이내로 제한
-            if abs(price - state.current_price) > max_deviation:
-                if price > state.current_price:
-                    price = state.current_price + max_deviation
-                else:
-                    price = state.current_price - max_deviation
-            
-            prices.append(price)
-            base_price = price
-        
-        # 마지막은 현재 가격으로 설정
-        prices[-1] = state.current_price
+        # 실제 가격 데이터 가져오기
+        times, prices = get_real_price_data(state)
         
         # 데이터 검증
         if any(p <= 0 for p in prices):
