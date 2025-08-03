@@ -79,6 +79,23 @@ class PositionManager:
                 """
             )
             
+            # VWAP 히스토리 테이블 추가
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS vwap_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    symbol TEXT NOT NULL,
+                    vwap REAL NOT NULL,
+                    upper_band REAL,
+                    lower_band REAL,
+                    current_price REAL,
+                    adx REAL,
+                    volume_window_trades INTEGER DEFAULT 0
+                )
+                """
+            )
+            
             # Add new columns to existing tables (for backward compatibility)
             try:
                 await db.execute("ALTER TABLE pending_orders ADD COLUMN strategy_type TEXT DEFAULT 'OBI'")
@@ -380,3 +397,61 @@ class PositionManager:
             except asyncio.CancelledError:
                 pass
         log.info("[PositionManager] Monitor task cancelled")
+
+    async def save_vwap_history(self, symbol: str, vwap: float, upper_band: float = None, 
+                               lower_band: float = None, current_price: float = None, 
+                               adx: float = None, volume_window_trades: int = 0):
+        """VWAP 히스토리 데이터를 DB에 저장"""
+        try:
+            async with aiosqlite.connect(self.db_path) as db:
+                await db.execute(
+                    """
+                    INSERT INTO vwap_history 
+                    (symbol, vwap, upper_band, lower_band, current_price, adx, volume_window_trades)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (symbol, vwap, upper_band, lower_band, current_price, adx, volume_window_trades)
+                )
+                await db.commit()
+        except Exception as e:
+            log.error(f"Error saving VWAP history: {e}")
+    
+    async def get_vwap_history(self, symbol: str, hours: int = 1) -> list:
+        """지정된 시간 동안의 VWAP 히스토리 조회"""
+        try:
+            async with aiosqlite.connect(self.db_path) as db:
+                cursor = await db.execute(
+                    """
+                    SELECT timestamp, vwap, upper_band, lower_band, current_price, adx
+                    FROM vwap_history 
+                    WHERE symbol = ? AND timestamp >= datetime('now', '-{} hours')
+                    ORDER BY timestamp ASC
+                    """.format(hours),
+                    (symbol,)
+                )
+                rows = await cursor.fetchall()
+                return [
+                    {
+                        'timestamp': row[0],
+                        'vwap': row[1],
+                        'upper_band': row[2],
+                        'lower_band': row[3],
+                        'current_price': row[4],
+                        'adx': row[5]
+                    }
+                    for row in rows
+                ]
+        except Exception as e:
+            log.error(f"Error getting VWAP history: {e}")
+            return []
+    
+    async def cleanup_old_vwap_history(self, days: int = 7):
+        """오래된 VWAP 히스토리 데이터 정리"""
+        try:
+            async with aiosqlite.connect(self.db_path) as db:
+                await db.execute(
+                    "DELETE FROM vwap_history WHERE timestamp < datetime('now', '-{} days')".format(days)
+                )
+                await db.commit()
+        except Exception as e:
+            log.error(f"Error cleaning up VWAP history: {e}")

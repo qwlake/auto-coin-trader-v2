@@ -4,93 +4,276 @@ from plotly.subplots import make_subplots
 import pandas as pd
 from datetime import datetime, timedelta
 import numpy as np
+import aiosqlite
 
-def create_price_chart(state):
-    """실시간 가격 차트 생성"""
+
+async def get_vwap_history_from_db(points_needed: int):
+    """DB에서 VWAP 히스토리 데이터 조회"""
+    try:
+        from config.settings import settings
+        
+        # 필요한 포인트 수의 2배 조회 (충분한 데이터 확보)
+        limit = max(points_needed * 2, 100)
+        
+        async with aiosqlite.connect("storage/orders.db") as db:
+            cursor = await db.execute(
+                """
+                SELECT timestamp, vwap, upper_band, lower_band, current_price, adx
+                FROM vwap_history 
+                WHERE symbol = ? 
+                ORDER BY timestamp DESC 
+                LIMIT ?
+                """,
+                (settings.SYMBOL, limit)
+            )
+            rows = await cursor.fetchall()
+            
+            if not rows:
+                return None
+                
+            # 시간순으로 정렬 (최신이 마지막)
+            rows.reverse()
+            
+            return [
+                {
+                    'timestamp': row[0],
+                    'vwap': row[1],
+                    'upper_band': row[2],
+                    'lower_band': row[3],
+                    'current_price': row[4],
+                    'adx': row[5]
+                }
+                for row in rows
+            ]
+    except Exception as e:
+        from utils.logger import log
+        log.error(f"Error getting VWAP history: {e}")
+        return None
+
+
+def align_vwap_with_chart_times(chart_times, vwap_history):
+    """VWAP 히스토리를 차트 시간에 맞춰 정렬"""
+    if not vwap_history:
+        return [], [], [], []
+    
+    # VWAP 히스토리 데이터를 시간 기준으로 정렬
+    vwap_data = {}
+    for entry in vwap_history:
+        timestamp_str = entry['timestamp']
+        try:
+            # SQLite datetime을 파싱
+            dt = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+            vwap_data[dt] = entry
+        except:
+            # 다른 형식 시도
+            try:
+                dt = datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
+                vwap_data[dt] = entry
+            except:
+                continue
+    
+    if not vwap_data:
+        return [], [], [], []
+    
+    # 차트 시간 범위 확인
+    chart_start = min(chart_times)
+    chart_end = max(chart_times)
+    
+    # 차트 시간 범위 내의 VWAP 데이터 필터링
+    filtered_times = []
+    filtered_vwap = []
+    filtered_upper = []
+    filtered_lower = []
+    
+    for dt, entry in sorted(vwap_data.items()):
+        # 차트 시간 범위 ±10분 내의 데이터만 사용
+        if chart_start - timedelta(minutes=10) <= dt <= chart_end + timedelta(minutes=10):
+            filtered_times.append(dt)
+            filtered_vwap.append(entry['vwap'])
+            filtered_upper.append(entry['upper_band'] or entry['vwap'])
+            filtered_lower.append(entry['lower_band'] or entry['vwap'])
+    
+    return filtered_times, filtered_vwap, filtered_upper, filtered_lower
+
+
+async def get_real_ohlcv_data(state):
+    """바이낸스에서 실제 OHLCV 캔들 데이터를 가져와서 반환"""
+    from binance import AsyncClient
+    from config.settings import settings
+    
+    try:
+        # AsyncClient 생성
+        kwargs = {
+            "api_key": settings.BINANCE_API_KEY,
+            "api_secret": settings.BINANCE_SECRET,
+            "testnet": settings.TESTNET,
+        }
+        client = await AsyncClient.create(**kwargs)
+        
+        try:
+            # 최근 50개의 1분 캔들 데이터 가져오기 (더 많은 데이터로 캔들 차트 품질 향상)
+            klines = await client.futures_klines(
+                symbol=settings.SYMBOL,
+                interval="1m",
+                limit=50
+            )
+            
+            # OHLCV 데이터 파싱
+            times = []
+            opens = []
+            highs = []
+            lows = []
+            closes = []
+            volumes = []
+            
+            for kline in klines:
+                # kline 구조: [시작시간, 시가, 고가, 저가, 종가, 거래량, ...]
+                timestamp = int(kline[0]) / 1000  # 밀리초를 초로 변환
+                open_price = float(kline[1])
+                high_price = float(kline[2])
+                low_price = float(kline[3])
+                close_price = float(kline[4])
+                volume = float(kline[5])
+                
+                times.append(datetime.fromtimestamp(timestamp))
+                opens.append(open_price)
+                highs.append(high_price)
+                lows.append(low_price)
+                closes.append(close_price)
+                volumes.append(volume)
+            
+            return times, opens, highs, lows, closes, volumes
+            
+        finally:
+            await client.close_connection()
+            
+    except Exception as e:
+        from utils.logger import log
+        log.error(f"Error fetching OHLCV data from Binance: {e}")
+        # 오류 발생 시 폴백: 현재 가격을 사용한 단순 데이터
+        now = datetime.now()
+        times = [now - timedelta(minutes=i) for i in range(50, -1, -1)]
+        current_price = state.current_price
+        opens = [current_price] * len(times)
+        highs = [current_price * 1.001] * len(times)  # 0.1% 위
+        lows = [current_price * 0.999] * len(times)   # 0.1% 아래
+        closes = [current_price] * len(times)
+        volumes = [1000] * len(times)  # 임시 거래량
+        return times, opens, highs, lows, closes, volumes
+
+async def create_price_chart(state):
+    """실시간 캔들스틱 차트 생성"""
     
     try:
         if state.current_price <= 0:
             return None
         
-        # 실제 가격 데이터 가져오기
-        times, prices = get_real_price_data(state)
+        # 실제 OHLCV 데이터 가져오기
+        times, opens, highs, lows, closes, volumes = await get_real_ohlcv_data(state)
         
         # 데이터 검증
-        if any(p <= 0 for p in prices):
-            print(f"Warning: Found non-positive prices: {[p for p in prices if p <= 0]}")
+        if any(p <= 0 for p in closes):
+            from utils.logger import log
+            log.warning("Found non-positive prices in closes")
             # 음수나 0인 가격을 현재 가격으로 대체
-            prices = [max(p, state.current_price * 0.99) for p in prices]
+            for i in range(len(closes)):
+                if closes[i] <= 0:
+                    closes[i] = state.current_price
+                if opens[i] <= 0:
+                    opens[i] = state.current_price
+                if highs[i] <= 0:
+                    highs[i] = state.current_price
+                if lows[i] <= 0:
+                    lows[i] = state.current_price
         
         # 차트 생성
         fig = make_subplots(
             rows=2, cols=1,
-            subplot_titles=("가격 차트", "거래량"),
+            subplot_titles=("캔들스틱 차트", "거래량"),
             vertical_spacing=0.1,
             row_heights=[0.7, 0.3]
         )
         
-        # 가격 라인
+        # 캔들스틱 차트
         fig.add_trace(
-            go.Scatter(
+            go.Candlestick(
                 x=times,
-                y=prices,
-                mode='lines',
-                name='가격',
-                line=dict(color='#2E86AB', width=2)
+                open=opens,
+                high=highs,
+                low=lows,
+                close=closes,
+                name='OHLC',
+                increasing_line_color='#26A69A',
+                decreasing_line_color='#EF5350'
             ),
             row=1, col=1
         )
         
-        # VWAP 전략의 경우 추가 지표 표시
+        # VWAP 전략의 경우 추가 지표 표시 (히스토리 데이터 사용)
         if state.strategy_type == "VWAP" and hasattr(state, 'vwap') and state.vwap > 0:
-            # VWAP 라인
-            vwap_line = [state.vwap] * len(times)
-            fig.add_trace(
-                go.Scatter(
-                    x=times,
-                    y=vwap_line,
-                    mode='lines',
-                    name='VWAP',
-                    line=dict(color='#F18F01', width=2, dash='dash')
-                ),
-                row=1, col=1
-            )
+            # DB에서 VWAP 히스토리 가져오기
+            vwap_history = await get_vwap_history_from_db(len(times))
             
-            # 상단/하단 밴드
-            if (hasattr(state, 'upper_band') and hasattr(state, 'lower_band') and 
-                state.upper_band > 0 and state.lower_band > 0):
-                upper_band_line = [state.upper_band] * len(times)
-                lower_band_line = [state.lower_band] * len(times)
+            if vwap_history:
+                # 히스토리 데이터를 차트 시간에 맞춰 정렬
+                vwap_times, vwap_values, upper_values, lower_values = align_vwap_with_chart_times(
+                    times, vwap_history
+                )
                 
+                # VWAP 라인 (실제 히스토리 데이터)
                 fig.add_trace(
                     go.Scatter(
-                        x=times,
-                        y=upper_band_line,
+                        x=vwap_times,
+                        y=vwap_values,
                         mode='lines',
-                        name='상단밴드',
-                        line=dict(color='#E71D36', width=1, dash='dot'),
-                        opacity=0.7
+                        name='VWAP',
+                        line=dict(color='#F18F01', width=2, dash='dash')
                     ),
                     row=1, col=1
                 )
                 
+                # 상단/하단 밴드 (실제 히스토리 데이터)
+                if upper_values and lower_values:
+                    fig.add_trace(
+                        go.Scatter(
+                            x=vwap_times,
+                            y=upper_values,
+                            mode='lines',
+                            name='상단밴드',
+                            line=dict(color='#E71D36', width=1, dash='dot'),
+                            opacity=0.7
+                        ),
+                        row=1, col=1
+                    )
+                    
+                    fig.add_trace(
+                        go.Scatter(
+                            x=vwap_times,
+                            y=lower_values,
+                            mode='lines',
+                            name='하단밴드',
+                            line=dict(color='#2D9D32', width=1, dash='dot'),
+                            opacity=0.7,
+                            fill='tonexty',
+                            fillcolor='rgba(45, 157, 50, 0.1)'
+                        ),
+                        row=1, col=1
+                    )
+            else:
+                # 폴백: 현재 값으로 평평한 라인 (히스토리가 없는 경우)
+                vwap_line = [state.vwap] * len(times)
                 fig.add_trace(
                     go.Scatter(
                         x=times,
-                        y=lower_band_line,
+                        y=vwap_line,
                         mode='lines',
-                        name='하단밴드',
-                        line=dict(color='#2D9D32', width=1, dash='dot'),
-                        opacity=0.7,
-                        fill='tonexty',
-                        fillcolor='rgba(45, 157, 50, 0.1)'
+                        name='VWAP (현재)',
+                        line=dict(color='#F18F01', width=2, dash='dash')
                     ),
                     row=1, col=1
                 )
         
-        # 일관된 거래량 데이터 (같은 시드 사용)
-        volumes = np.random.uniform(100, 1000, len(times))
-        
+        # 실제 거래량 데이터 사용
         fig.add_trace(
             go.Bar(
                 x=times,
@@ -104,7 +287,7 @@ def create_price_chart(state):
         # 레이아웃 설정
         fig.update_layout(
             height=600,
-            title_text=f"{state.strategy_type} 전략 - 실시간 차트",
+            title_text=f"{state.strategy_type} 전략 - 캔들스틱 차트",
             showlegend=True,
             xaxis_rangeslider_visible=False,
             template="plotly_white"
@@ -113,25 +296,39 @@ def create_price_chart(state):
         # X축 설정
         fig.update_xaxes(title_text="시간", row=2, col=1)
         
-        # Y축 설정 - 가격 차트의 Y축 범위를 현재 가격 주변으로 제한
-        price_center = state.current_price
-        price_range = max(abs(max(prices) - price_center), abs(price_center - min(prices)))
-        y_margin = price_range * 0.1  # 10% 여백
+        # Y축 설정 - 캔들 데이터의 고가/저가를 기준으로 범위 설정
+        all_highs = [h for h in highs if h > 0]
+        all_lows = [l for l in lows if l > 0]
         
-        fig.update_yaxes(
-            title_text="가격 ($)", 
-            row=1, col=1,
-            range=[price_center - price_range - y_margin, price_center + price_range + y_margin]
-        )
+        if all_highs and all_lows:
+            price_max = max(all_highs)
+            price_min = min(all_lows)
+            price_range = price_max - price_min
+            y_margin = price_range * 0.05  # 5% 여백
+            
+            fig.update_yaxes(
+                title_text="가격 ($)", 
+                row=1, col=1,
+                range=[price_min - y_margin, price_max + y_margin]
+            )
+        else:
+            # 폴백: 현재 가격 주변으로 설정
+            current_price = state.current_price
+            fig.update_yaxes(
+                title_text="가격 ($)", 
+                row=1, col=1,
+                range=[current_price * 0.99, current_price * 1.01]
+            )
+        
         fig.update_yaxes(title_text="거래량", row=2, col=1)
         
         return fig
         
     except Exception as e:
-        print(f"Error creating price chart: {e}")
-        print(f"State data: current_price={getattr(state, 'current_price', 'N/A')}, strategy_type={getattr(state, 'strategy_type', 'N/A')}")
-        import traceback
-        traceback.print_exc()
+        from utils.logger import log
+        log.error(f"Error creating price chart: {e}")
+        log.debug(f"State data: current_price={getattr(state, 'current_price', 'N/A')}, strategy_type={getattr(state, 'strategy_type', 'N/A')}")
+        log.exception("Chart creation error details:")
         return None
 
 def create_pnl_chart(closed_positions):

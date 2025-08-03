@@ -7,6 +7,7 @@ import time
 from datetime import datetime, timedelta
 import sys
 import os
+import asyncio
 
 # Add project root to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -66,6 +67,7 @@ def main():
     daily_stats = db_reader.get_daily_stats()
     active_positions = db_reader.get_active_positions()
     closed_positions = db_reader.get_closed_positions(limit=20)
+    connection_stats = data_broker.get_connection_stats()
     
     # 메인 대시보드
     col1, col2, col3, col4 = st.columns(4)
@@ -146,7 +148,7 @@ def main():
     
     with chart_tab1:
         try:
-            chart = create_price_chart(state)
+            chart = asyncio.run(create_price_chart(state))
             if chart:
                 st.plotly_chart(chart, use_container_width=True)
             else:

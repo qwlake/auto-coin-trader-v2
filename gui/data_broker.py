@@ -37,6 +37,7 @@ class DataBroker:
         self.data_file = Path(data_file)
         self.data_file.parent.mkdir(exist_ok=True)
         self._lock = threading.Lock()
+        self.connection_stats = {}
         
         # 기존 파일이 있으면 로드, 없으면 초기 상태 생성
         if self.data_file.exists():
@@ -144,6 +145,16 @@ class DataBroker:
     def set_halt_status(self, is_halted: bool):
         """거래 중단 상태 업데이트"""
         self.update_state(is_halted=is_halted)
+    
+    def update_connection_stats(self, stats: dict):
+        """연결 상태 통계 업데이트"""
+        with self._lock:
+            self.connection_stats = stats
+    
+    def get_connection_stats(self) -> dict:
+        """연결 상태 통계 반환"""
+        with self._lock:
+            return self.connection_stats.copy()
 
 class DatabaseReader:
     """SQLite 데이터베이스에서 거래 데이터 조회"""
