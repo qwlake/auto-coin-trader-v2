@@ -134,11 +134,11 @@ class EnhancedFuturesStream:
     async def _run_trade_stream(self, bm: BinanceSocketManager):
         """Handle individual trades for VWAP calculation"""
         try:
-            async with bm.futures_trade_socket(self.symbol) as stream:
+            async with bm.aggtrade_futures_socket(self.symbol) as stream:
                 while True:
                     msg = await stream.recv()
-                    price = float(msg['p'])
-                    quantity = float(msg['q'])
+                    price = float(msg['data']['p'])
+                    quantity = float(msg['data']['q'])
                     
                     # Update current price
                     self.current_price = price
@@ -160,7 +160,7 @@ class EnhancedFuturesStream:
     async def _run_kline_stream(self, bm: BinanceSocketManager):
         """Handle kline data for ADX calculation"""
         try:
-            async with bm.futures_kline_socket(self.symbol, interval='1m') as stream:
+            async with bm.kline_futures_socket(self.symbol, interval='1m') as stream:
                 while True:
                     msg = await stream.recv()
                     kline = msg['k']
