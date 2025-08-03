@@ -1,10 +1,11 @@
 from config.settings import settings
 from utils.logger import log
 from typing import Optional
+from .base_strategy import BaseStrategy
 from .indicators import VWAPCalculator, ADXCalculator, VWAPBandCalculator, VolatilityMonitor
 
 
-class VWAPMeanReversionStrategy:
+class VWAPMeanReversionStrategy(BaseStrategy):
     """
     VWAP Mean Reversion Trading Strategy
     
@@ -46,6 +47,7 @@ class VWAPMeanReversionStrategy:
         self.current_upper_band = 0.0
         self.current_lower_band = 0.0
         self.current_adx = None
+        self._adx_initialized = False  # ADX 초기화 상태 추적
     
     def update_trade(self, price: float, volume: float):
         """Update indicators with new trade data"""
@@ -71,9 +73,15 @@ class VWAPMeanReversionStrategy:
     def update_kline(self, high: float, low: float, close: float):
         """Update ADX with new kline data"""
         if high <= 0 or low <= 0 or close <= 0:
+            log.warning(f"[VWAP Strategy] Invalid kline data: H:{high}, L:{low}, C:{close}")
             return
-            
+        
+        old_adx = self.current_adx
         self.current_adx = self.adx_calc.update(high, low, close)
+        
+        log.debug(f"[VWAP Strategy] Kline update: H:{high:.2f}, L:{low:.2f}, C:{close:.2f}")
+        log.debug(f"[VWAP Strategy] ADX: {old_adx} -> {self.current_adx}")
+        log.debug(f"[VWAP Strategy] ADX calc has {len(self.adx_calc.tr_values)} TR values (need {self.adx_calc.period})")
     
     def signal(self) -> Optional[str]:
         """Generate trading signal based on VWAP mean reversion logic"""
@@ -86,8 +94,9 @@ class VWAPMeanReversionStrategy:
             log.info("[VWAP Strategy] Trading halted due to volatility")
             return None
         
-        if self.current_adx is None:
-            log.debug("[VWAP Strategy] ADX not available yet")
+        # ADX 지연 초기화 확인
+        if self.current_adx is None and not self._adx_initialized:
+            log.debug("[VWAP Strategy] ADX not available yet - will be calculated from incoming klines")
             return None
             
         # Market regime filter
@@ -106,7 +115,7 @@ class VWAPMeanReversionStrategy:
             self.current_upper_band > 0,
             self.current_lower_band > 0
         ]):
-            log.debug("[VWAP Strategy] Indicators not ready")
+            log.debug(f"[VWAP Strategy] Indicators not ready: price={self.current_price}, vwap={self.current_vwap}, bands=[{self.current_lower_band}-{self.current_upper_band}], adx={self.current_adx}")
             return None
         
         # Mean reversion signal generation
@@ -167,3 +176,49 @@ class VWAPMeanReversionStrategy:
             
             return True
         return False
+    
+    async def initialize_with_history(self):
+        """봇 시작 시 히스토리 데이터로 ADX 초기화"""
+        try:
+            from binance import AsyncClient
+            
+            log.info("[VWAP Strategy] Initializing ADX with historical kline data...")
+            
+            kwargs = {
+                "api_key": settings.BINANCE_API_KEY,
+                "api_secret": settings.BINANCE_SECRET,
+                "testnet": settings.TESTNET,
+            }
+            client = await AsyncClient.create(**kwargs)
+            
+            try:
+                # ADX 계산에 필요한 충분한 kline 데이터 가져오기 (30개)
+                klines = await client.futures_klines(
+                    symbol=settings.SYMBOL,
+                    interval="1m",
+                    limit=30
+                )
+                
+                log.info(f"[VWAP Strategy] Retrieved {len(klines)} historical klines for ADX initialization")
+                
+                # 각 kline을 ADX 계산기에 입력
+                for i, kline in enumerate(klines):
+                    high = float(kline[2])
+                    low = float(kline[3])
+                    close = float(kline[4])
+                    
+                    adx_result = self.adx_calc.update(high, low, close)
+                    self.current_adx = adx_result
+                    
+                    if i % 10 == 0:  # 10개마다 로그
+                        log.debug(f"[VWAP Strategy] ADX init {i+1}/{len(klines)}: ADX={adx_result}")
+                
+                log.info(f"[VWAP Strategy] ADX initialization completed. Final ADX: {self.current_adx}")
+                self._adx_initialized = True
+                
+            finally:
+                await client.close_connection()
+                
+        except Exception as e:
+            log.error(f"[VWAP Strategy] Failed to initialize ADX with history: {e}")
+            log.info("[VWAP Strategy] ADX will be calculated as new kline data arrives")

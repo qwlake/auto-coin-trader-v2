@@ -96,10 +96,10 @@ class EnhancedFuturesStream:
             client = await AsyncClient.create(**kwargs)
             
             try:
-                # VWAP 전략인 경우 ADX 초기화
-                if self.strategy and hasattr(self.strategy, 'initialize_adx_with_history'):
-                    log.info("[EnhancedFuturesStream] Initializing VWAP strategy ADX with historical data...")
-                    await self.strategy.initialize_adx_with_history()
+                # 전략별 초기화 실행
+                if self.strategy and hasattr(self.strategy, 'initialize_with_history'):
+                    log.info("[EnhancedFuturesStream] Initializing strategy with historical data...")
+                    await self.strategy.initialize_with_history()
                 
                 bm = BinanceSocketManager(client)
                 
@@ -326,6 +326,7 @@ class EnhancedFuturesStream:
                         upper_band = indicator_data.get('upper_band', 0)
                         lower_band = indicator_data.get('lower_band', 0)
                         adx = indicator_data.get('adx')  # None을 허용
+                        log.debug(f"[GUI Update] Retrieved ADX from indicator_data: {adx} (type: {type(adx)})")
                         
                         data_broker.update_indicators(
                             vwap=vwap,
@@ -390,6 +391,7 @@ class EnhancedFuturesStream:
             
             # ADX 값이 None이면 NULL로 저장, 값이 있으면 그대로 저장
             adx_value = adx if adx is not None else None
+            log.debug(f"[VWAPHistory] Saving ADX to DB: adx={adx}, adx_value={adx_value}")
             
             async with aiosqlite.connect("storage/orders.db") as db:
                 # 현재 윈도우 내 거래 수 계산

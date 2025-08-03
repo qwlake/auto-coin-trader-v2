@@ -90,14 +90,20 @@ class ADXCalculator:
     
     def update(self, high: float, low: float, close: float) -> Optional[float]:
         """Update ADX with new OHLC data from kline stream"""
+        from utils.logger import log
+        
         if high <= 0 or low <= 0 or close <= 0 or high < low:
+            log.warning(f"[ADX] Invalid OHLC data: H:{high}, L:{low}, C:{close}")
             return self.current_adx
             
         self.highs.append(high)
         self.lows.append(low)
         self.closes.append(close)
         
+        log.debug(f"[ADX] Added OHLC: H:{high:.2f}, L:{low:.2f}, C:{close:.2f} - Total closes: {len(self.closes)}")
+        
         if len(self.closes) < 2:
+            log.debug(f"[ADX] Need at least 2 closes, have {len(self.closes)}")
             return None
             
         # Calculate True Range and Directional Movement
@@ -116,7 +122,12 @@ class ADXCalculator:
             self.minus_dm_values.append(minus_dm)
         
         if len(self.tr_values) >= self.period:
-            return self._calculate_adx()
+            log.debug(f"[ADX] Calculating ADX with {len(self.tr_values)} TR values")
+            result = self._calculate_adx()
+            log.debug(f"[ADX] Calculated ADX: {result}")
+            return result
+        else:
+            log.debug(f"[ADX] Need {self.period} TR values, have {len(self.tr_values)}")
         
         return None
     
