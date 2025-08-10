@@ -2,9 +2,22 @@ import pytest
 import asyncio
 import sys
 import os
+from dotenv import load_dotenv
 
-# Add the project root to sys.path for imports
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Add the project root to sys.path for imports and change working directory
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, project_root)
+
+# Change working directory to project root before loading .env
+original_cwd = os.getcwd()
+os.chdir(project_root)
+
+# Load .env files from project root
+load_dotenv()
+load_dotenv(".apikey")
+
+# Restore original working directory
+os.chdir(original_cwd)
 
 
 @pytest.fixture(scope="session")
