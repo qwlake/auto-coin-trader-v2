@@ -96,20 +96,6 @@ class PositionManager:
                 """
             )
             
-            # Add new columns to existing tables (for backward compatibility)
-            try:
-                await db.execute("ALTER TABLE pending_orders ADD COLUMN strategy_type TEXT DEFAULT 'OBI'")
-                await db.execute("ALTER TABLE pending_orders ADD COLUMN vwap_at_entry REAL DEFAULT NULL")
-                await db.execute("ALTER TABLE active_positions ADD COLUMN strategy_type TEXT DEFAULT 'OBI'")
-                await db.execute("ALTER TABLE active_positions ADD COLUMN vwap_at_entry REAL DEFAULT NULL")
-                await db.execute("ALTER TABLE active_positions ADD COLUMN timestamp DATETIME DEFAULT CURRENT_TIMESTAMP")
-                await db.execute("ALTER TABLE closed_positions ADD COLUMN strategy_type TEXT DEFAULT 'OBI'")
-                await db.execute("ALTER TABLE closed_positions ADD COLUMN vwap_at_entry REAL DEFAULT NULL")
-                await db.execute("ALTER TABLE closed_positions ADD COLUMN exit_reason TEXT DEFAULT 'TP_SL'")
-            except Exception:
-                # Columns already exist
-                pass
-            
             await db.commit()
 
         # 2) 백그라운드 모니터링 태스크 시작
@@ -163,12 +149,7 @@ class PositionManager:
                     rows = await cursor.fetchall()
 
                 for row in rows:
-                    if len(row) >= 6:
-                        order_id, symbol, side, orig_qty, strategy_type, vwap_at_entry = row
-                    else:
-                        order_id, symbol, side, orig_qty = row[:4]
-                        strategy_type = "OBI"
-                        vwap_at_entry = None
+                    order_id, symbol, side, orig_qty, strategy_type, vwap_at_entry = row
                         
                     # 실제 Binance 주문 상태 확인
                     resp = await self.client.futures_get_order(symbol=symbol, orderId=order_id)
@@ -214,12 +195,7 @@ class PositionManager:
                     active_rows = await cursor.fetchall()
 
                 for row in active_rows:
-                    if len(row) >= 7:
-                        order_id, symbol, side, entry_price, qty, strategy_type, vwap_at_entry = row
-                    else:
-                        order_id, symbol, side, entry_price, qty = row[:5]
-                        strategy_type = "OBI"
-                        vwap_at_entry = None
+                    order_id, symbol, side, entry_price, qty, strategy_type, vwap_at_entry = row
                     
                     # Strategy-specific TP/SL calculation
                     if strategy_type == "VWAP":
