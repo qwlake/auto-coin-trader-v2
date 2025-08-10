@@ -6,6 +6,9 @@
 
 ### 프로젝트 루트에서 실행:
 ```bash
+# 의존성 설치 (처음 한 번만)
+uv sync --dev
+
 # 모든 테스트 실행
 python -m pytest test/ -v
 
@@ -13,6 +16,7 @@ python -m pytest test/ -v
 python -m pytest test/test_order_executor.py -v
 
 # 커버리지와 함께 실행 (pytest-cov 설치 필요)
+uv add pytest-cov --dev
 python -m pytest test/ --cov=executor --cov-report=html
 ```
 
