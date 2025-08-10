@@ -3,8 +3,8 @@ import aiosqlite
 from typing import Dict, List, Optional, Tuple
 from config.settings import settings
 from utils.logger import log
-from binance import AsyncClient
 from datetime import datetime
+from . import order_executor
 
 
 class PositionManager:
@@ -21,8 +21,7 @@ class PositionManager:
             조건 만족 시 시장가 청산 → closed_positions 테이블에 기록
     └────────────────────────────────────────────────────────────────────────┘
     """
-    def __init__(self, client: AsyncClient):
-        self.client = client
+    def __init__(self):
         self.db_path = "storage/orders.db"
         self._task = None
 
@@ -152,7 +151,7 @@ class PositionManager:
                     order_id, symbol, side, orig_qty, strategy_type, vwap_at_entry = row
                         
                     # 실제 Binance 주문 상태 확인
-                    resp = await self.client.futures_get_order(symbol=symbol, orderId=order_id)
+                    resp = await order_executor.get_order(symbol=symbol, order_id=order_id)
                     status = resp.get("status")
                     if status == "FILLED":
                         entry_price = (
@@ -185,7 +184,7 @@ class PositionManager:
 
                 # ── 2) active_positions TP/SL 체크 ─────────────────────────────────────────────
                 # 현재가 가져오기 (여기서는 단일 심볼 가정. 멀티심볼은 각 심볼별 조회 또는 WebSocket 유지)
-                ticker = await self.client.futures_symbol_ticker(symbol=settings.SYMBOL)
+                ticker = await order_executor.get_symbol_ticker(symbol=settings.SYMBOL)
                 current_price = float(ticker["price"])
 
                 async with aiosqlite.connect(self.db_path) as db:
@@ -213,11 +212,10 @@ class PositionManager:
                     if should_close:
                         # Execute market order for position closure
                         market_side = "SELL" if side == "BUY" else "BUY"
-                        market_order = await self.client.futures_create_order(
+                        market_order = await order_executor.place_market_order(
                             symbol=symbol,
                             side=market_side,
-                            type="MARKET",
-                            quantity=f"{qty:.6f}",
+                            quantity=f"{qty:.6f}"
                         )
                         exit_price = float(market_order["fills"][0]["price"])
                         pnl = self._calculate_pnl(side, entry_price, exit_price, qty)

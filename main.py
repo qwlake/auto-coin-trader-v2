@@ -37,7 +37,7 @@ async def runner():
     inject_client(client)
 
     # 2) PositionManager 초기화
-    pos_manager = PositionManager(client)
+    pos_manager = PositionManager()
     await pos_manager.init()
 
     # 3) Strategy initialization based on configuration

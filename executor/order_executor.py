@@ -74,3 +74,48 @@ async def get_open_orders():
     assert client, "AsyncClient not injected"
     orders = await client.futures_get_open_orders(symbol=settings.SYMBOL)
     return orders
+
+async def get_order(symbol: str, order_id: int):
+    """특정 주문 상태 조회 (DRY_RUN 지원)"""
+    if settings.DRY_RUN:
+        log.info(f"[DRY RUN] get_order {order_id}")
+        return {
+            "orderId": order_id,
+            "symbol": symbol,
+            "status": "NEW",
+            "avgPrice": "0",
+            "price": "0",
+            "executedQty": "0"
+        }
+
+    assert client, "AsyncClient not injected"
+    return await client.futures_get_order(symbol=symbol, orderId=order_id)
+
+async def get_symbol_ticker(symbol: str):
+    """심볼 현재가 조회 (DRY_RUN 지원)"""
+    if settings.DRY_RUN:
+        log.info(f"[DRY RUN] get_symbol_ticker {symbol}")
+        return {"price": "50000.0"}  # 가상 가격
+
+    assert client, "AsyncClient not injected"
+    return await client.futures_symbol_ticker(symbol=symbol)
+
+async def place_market_order(symbol: str, side: str, quantity: str):
+    """시장가 주문 (DRY_RUN 지원)"""
+    if settings.DRY_RUN:
+        log.info(f"[DRY RUN] {side} MARKET {symbol} qty={quantity}")
+        return {
+            "orderId": -1,
+            "symbol": symbol,
+            "side": side,
+            "type": "MARKET",
+            "fills": [{"price": "50000.0"}]
+        }
+
+    assert client, "AsyncClient not injected"
+    return await client.futures_create_order(
+        symbol=symbol,
+        side=side,
+        type="MARKET",
+        quantity=quantity
+    )
