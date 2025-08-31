@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timezone
 
 def create_positions_table(positions):
     """활성 포지션 테이블 생성"""
@@ -27,9 +27,10 @@ def create_positions_table(positions):
     existing_columns = {k: v for k, v in column_mapping.items() if k in df.columns}
     df = df.rename(columns=existing_columns)
     
-    # 시간 포맷팅
+    # 시간 포맷팅 (UTC에서 로컬 타임으로 변환)
     if '시간' in df.columns:
-        df['시간'] = pd.to_datetime(df['시간']).dt.strftime('%H:%M:%S')
+        # UTC 시간으로 가정하고 로컬 타임으로 변환 후 포맷팅
+        df['시간'] = pd.to_datetime(df['시간'], utc=True).dt.tz_convert(None).dt.strftime('%H:%M:%S')
     
     # 가격 포맷팅
     if '진입가' in df.columns:
@@ -79,9 +80,10 @@ def create_trades_table(trades):
     existing_columns = {k: v for k, v in column_mapping.items() if k in df.columns}
     df = df.rename(columns=existing_columns)
     
-    # 시간 포맷팅
+    # 시간 포맷팅 (UTC에서 로컬 타임으로 변환)
     if '시간' in df.columns:
-        df['시간'] = pd.to_datetime(df['시간']).dt.strftime('%m-%d %H:%M')
+        # UTC 시간으로 가정하고 로컬 타임으로 변환 후 포맷팅
+        df['시간'] = pd.to_datetime(df['시간'], utc=True).dt.tz_convert(None).dt.strftime('%m-%d %H:%M')
     
     # 가격 포맷팅
     if '진입가' in df.columns:

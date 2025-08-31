@@ -2,9 +2,10 @@ import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import numpy as np
 import aiosqlite
+
 
 
 async def get_vwap_history_from_db(points_needed: int):
@@ -61,13 +62,19 @@ def align_vwap_with_chart_times(chart_times, vwap_history):
     for entry in vwap_history:
         timestamp_str = entry['timestamp']
         try:
-            # SQLite datetime을 파싱
+            # SQLite datetime을 파싱 (UTC 시간으로 가정)
             dt = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            # 로컬 타임으로 변환
+            dt = dt.astimezone()
             vwap_data[dt] = entry
         except:
             # 다른 형식 시도
             try:
+                # UTC 시간으로 가정하고 로컬 타임으로 변환
                 dt = datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
+                dt = dt.replace(tzinfo=timezone.utc).astimezone()
                 vwap_data[dt] = entry
             except:
                 continue
@@ -135,7 +142,10 @@ async def get_real_ohlcv_data(state):
                 close_price = float(kline[4])
                 volume = float(kline[5])
                 
-                times.append(datetime.fromtimestamp(timestamp))
+                # UTC 시간을 로컬 타임으로 변환
+                utc_time = datetime.fromtimestamp(timestamp, tz=timezone.utc)
+                local_time = utc_time.astimezone()
+                times.append(local_time)
                 opens.append(open_price)
                 highs.append(high_price)
                 lows.append(low_price)
@@ -151,6 +161,7 @@ async def get_real_ohlcv_data(state):
         from utils.logger import log
         log.error(f"Error fetching OHLCV data from Binance: {e}")
         # 오류 발생 시 폴백: 현재 가격을 사용한 단순 데이터
+        # 로컬 시간으로 생성
         now = datetime.now()
         times = [now - timedelta(minutes=i) for i in range(50, -1, -1)]
         current_price = state.current_price
@@ -158,7 +169,7 @@ async def get_real_ohlcv_data(state):
         highs = [current_price * 1.001] * len(times)  # 0.1% 위
         lows = [current_price * 0.999] * len(times)   # 0.1% 아래
         closes = [current_price] * len(times)
-        volumes = [1000] * len(times)  # 임시 거래량
+        volumes = [1000.0] * len(times)  # 임시 거래량
         return times, opens, highs, lows, closes, volumes
 
 async def create_price_chart(state):

@@ -4,7 +4,7 @@ import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import sys
 import os
 import asyncio
@@ -174,6 +174,9 @@ def main():
     with table_tab1:
         if active_positions:
             df = pd.DataFrame(active_positions)
+            # timestamp 컬럼이 있으면 UTC에서 로컬 타임으로 변환
+            if 'timestamp' in df.columns:
+                df['timestamp'] = pd.to_datetime(df['timestamp'], utc=True).dt.tz_convert(None)
             st.dataframe(
                 df,
                 use_container_width=True,
@@ -193,6 +196,9 @@ def main():
     with table_tab2:
         if closed_positions:
             df = pd.DataFrame(closed_positions)
+            # timestamp 컬럼이 있으면 UTC에서 로컬 타임으로 변환
+            if 'timestamp' in df.columns:
+                df['timestamp'] = pd.to_datetime(df['timestamp'], utc=True).dt.tz_convert(None)
             # PnL 컬럼에 색상 적용
             st.dataframe(
                 df,
