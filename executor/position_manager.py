@@ -24,6 +24,7 @@ class PositionManager:
     def __init__(self):
         self.db_path = "storage/orders.db"
         self._task = None
+        self._last_total_pnl = None
 
     async def init(self):
         """
@@ -240,12 +241,22 @@ class PositionManager:
                         
                         log.info(f"[PositionManager] Closed {strategy_type} {side} {order_id} @ {exit_price} / PnL={pnl:.6f} / Reason={exit_reason}")
 
-                # ── 3) 전체 PnL 누적 합계 로그 (선택사항) ─────────────────────────────────────
+                # ── 3) 전체 PnL 누적 합계 로그 (변화가 있을 때만) ─────────────────────────────────────
                 async with aiosqlite.connect(self.db_path) as db:
                     cursor = await db.execute("SELECT SUM(pnl) FROM closed_positions")
                     row = await cursor.fetchone()
                     total_pnl = row[0] or 0.0
-                log.info(f"[PositionManager] Total closed PnL so far = {total_pnl:.6f}")
+                
+                # PnL 변화 감지 및 로깅 (임계값: 0.01)
+                if self._last_total_pnl is None:
+                    # 첫 번째 로깅
+                    log.info(f"[PositionManager] Initial total PnL = {total_pnl:.6f}")
+                    self._last_total_pnl = total_pnl
+                elif abs(total_pnl - self._last_total_pnl) >= 0.01:
+                    # 변화가 임계값 이상일 때만 로깅
+                    change = total_pnl - self._last_total_pnl
+                    log.info(f"[PositionManager] Total PnL changed: {self._last_total_pnl:.6f} → {total_pnl:.6f} (Δ{change:+.6f})")
+                    self._last_total_pnl = total_pnl
                 
                 # GUI 데이터 업데이트
                 await self.update_gui_data()
