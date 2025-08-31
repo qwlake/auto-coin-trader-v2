@@ -202,10 +202,10 @@ async def create_price_chart(state):
         
         # 3. 차트 레이아웃 생성
         fig = make_subplots(
-            rows=3, cols=1,
-            subplot_titles=("캔들스틱 차트", "거래량", "ADX 추세 강도"),
-            vertical_spacing=0.08,
-            row_heights=[0.6, 0.2, 0.2]
+            rows=2, cols=1,
+            subplot_titles=("캔들스틱 차트", "거래량"),
+            vertical_spacing=0.1,
+            row_heights=[0.7, 0.3]
         )
         
         # 4. 메인 캔들스틱 차트 추가
@@ -217,10 +217,7 @@ async def create_price_chart(state):
         # 6. 거래량 차트 추가
         _add_volume_chart(fig, times, volumes)
         
-        # 7. ADX 차트 추가
-        _add_adx_chart(fig, state, indicator_data)
-        
-        # 8. 차트 레이아웃 및 축 설정
+        # 7. 차트 레이아웃 및 축 설정
         _configure_chart_layout(fig, state, highs, lows)
         
         return fig
@@ -320,8 +317,12 @@ def _add_candlestick_chart(fig, times, opens, highs, lows, closes):
 
 def _add_strategy_indicators(fig, state, indicator_data, chart_times):
     """전략별 보조 지표 추가 (캔들스틱 차트에 오버레이)"""
+    # VWAP 지표 추가 (VWAP 전략인 경우)
     if state.strategy_type == "VWAP" and hasattr(state, 'vwap') and state.vwap > 0:
         _add_vwap_indicators(fig, state, indicator_data, chart_times)
+    
+    # ADX 지표 추가 (모든 전략에서 사용 - 캔들스틱 차트 우측 Y축에 오버레이)
+    _add_adx_overlay(fig, state, indicator_data)
 
 
 def _add_vwap_indicators(fig, state, indicator_data, chart_times):
@@ -408,24 +409,25 @@ def _add_volume_chart(fig, times, volumes):
     )
 
 
-def _add_adx_chart(fig, state, indicator_data):
-    """ADX 차트 추가"""
+def _add_adx_overlay(fig, state, indicator_data):
+    """ADX 오버레이 추가 (캔들스틱 차트에 우측 Y축으로)"""
     adx_times = indicator_data.get('adx_times', [])
     adx_values = indicator_data.get('adx_values', [])
     
     try:
         if adx_values and adx_times:
-            # ADX 라인
+            # ADX 라인 (우측 Y축 사용)
             fig.add_trace(
                 go.Scatter(
                     x=adx_times,
                     y=adx_values,
-                    mode='lines+markers',
+                    mode='lines',
                     name='ADX',
-                    line=dict(color='#2E86AB', width=2),
-                    marker=dict(size=3)
+                    line=dict(color='#2E86AB', width=1.5, dash='dot'),
+                    opacity=0.8,
+                    yaxis='y2'  # 우측 Y축 사용
                 ),
-                row=3, col=1
+                row=1, col=1
             )
             
             # 현재 ADX 값 강조 표시
@@ -436,19 +438,24 @@ def _add_adx_chart(fig, state, indicator_data):
                         y=[state.adx],
                         mode='markers',
                         name='현재 ADX',
-                        marker=dict(size=8, color='red', symbol='circle')
+                        marker=dict(size=6, color='#2E86AB', symbol='circle'),
+                        yaxis='y2'  # 우측 Y축 사용
                     ),
-                    row=3, col=1
+                    row=1, col=1
                 )
             
-            # ADX 임계선들
-            fig.add_hline(y=20, line_dash="dash", line_color="orange", 
-                        annotation_text="추세 발생 (20)", row=3, col=1)
-            fig.add_hline(y=40, line_dash="dash", line_color="red", 
-                        annotation_text="강한 추세 (40)", row=3, col=1)
-            
-            # ADX Y축 범위 설정
-            fig.update_yaxes(range=[0, max(50, max(adx_values) * 1.1)], row=3, col=1)
+            # 우측 Y축 설정 (ADX용)
+            fig.update_layout(
+                yaxis2=dict(
+                    title="ADX",
+                    overlaying='y',
+                    side='right',
+                    range=[0, max(50, max(adx_values) * 1.1)],
+                    showgrid=False,
+                    tickfont=dict(size=10),
+                    titlefont=dict(size=12)
+                )
+            )
         else:
             # ADX 데이터가 없는 경우 현재값만 표시
             if hasattr(state, 'adx') and state.adx:
@@ -456,34 +463,47 @@ def _add_adx_chart(fig, state, indicator_data):
                     go.Scatter(
                         x=[pd.Timestamp.now()],
                         y=[state.adx],
-                        mode='markers',
+                        mode='markers+text',
                         name='현재 ADX',
-                        marker=dict(size=10, color='red', symbol='circle')
+                        marker=dict(size=8, color='#2E86AB', symbol='circle'),
+                        text=[f'ADX: {state.adx:.1f}'],
+                        textposition='top center',
+                        yaxis='y2'
                     ),
-                    row=3, col=1
+                    row=1, col=1
                 )
-                fig.add_hline(y=20, line_dash="dash", line_color="orange", row=3, col=1)
-                fig.add_hline(y=40, line_dash="dash", line_color="red", row=3, col=1)
-                fig.update_yaxes(range=[0, 50], row=3, col=1)
+                
+                # 우측 Y축 설정
+                fig.update_layout(
+                    yaxis2=dict(
+                        title="ADX",
+                        overlaying='y',
+                        side='right',
+                        range=[0, 50],
+                        showgrid=False,
+                        tickfont=dict(size=10),
+                        titlefont=dict(size=12)
+                    )
+                )
         
     except Exception as e:
         from utils.logger import log
-        log.error(f"Error adding ADX chart: {e}")
+        log.error(f"Error adding ADX overlay: {e}")
 
 
 def _configure_chart_layout(fig, state, highs, lows):
     """차트 레이아웃 및 축 설정"""
     # 레이아웃 설정
     fig.update_layout(
-        height=800,
-        title_text=f"{state.strategy_type} 전략 - 캔들스틱 차트 + ADX",
+        height=600,
+        title_text=f"{state.strategy_type} 전략 - 캔들스틱 차트 (ADX 오버레이)",
         showlegend=True,
         xaxis_rangeslider_visible=False,
         template="plotly_white"
     )
     
     # X축 설정
-    fig.update_xaxes(title_text="시간", row=3, col=1)
+    fig.update_xaxes(title_text="시간", row=2, col=1)
     
     # Y축 설정 - 캔들 데이터의 고가/저가를 기준으로 범위 설정
     all_highs = [h for h in highs if h > 0]
@@ -510,7 +530,6 @@ def _configure_chart_layout(fig, state, highs, lows):
         )
     
     fig.update_yaxes(title_text="거래량", row=2, col=1)
-    fig.update_yaxes(title_text="ADX", row=3, col=1)
 
 def create_pnl_chart(closed_positions):
     """PnL 누적 차트 생성"""
