@@ -301,10 +301,34 @@ async def create_price_chart(state):
             vwap_history = await get_vwap_history_from_db(len(times))
             
             if vwap_history:
-                # ADX 데이터 추출
-                adx_times = [pd.to_datetime(item['timestamp']) for item in vwap_history]
-                adx_values = [item['adx'] for item in vwap_history if item['adx'] is not None]
-                valid_adx_times = [adx_times[i] for i, item in enumerate(vwap_history) if item['adx'] is not None]
+                # ADX 데이터 추출 (로컬타임으로 변환)
+                adx_times = []
+                adx_values = []
+                
+                for item in vwap_history:
+                    if item['adx'] is not None:
+                        timestamp_str = item['timestamp']
+                        try:
+                            # SQLite datetime을 파싱 (UTC 시간으로 가정)
+                            dt = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+                            if dt.tzinfo is None:
+                                dt = dt.replace(tzinfo=timezone.utc)
+                            # 로컬 타임으로 변환
+                            local_dt = dt.astimezone()
+                            adx_times.append(local_dt)
+                            adx_values.append(item['adx'])
+                        except:
+                            # 다른 형식 시도
+                            try:
+                                # UTC 시간으로 가정하고 로컬 타임으로 변환
+                                dt = datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
+                                dt = dt.replace(tzinfo=timezone.utc).astimezone()
+                                adx_times.append(dt)
+                                adx_values.append(item['adx'])
+                            except:
+                                continue
+                
+                valid_adx_times = adx_times
                 
                 if adx_values and valid_adx_times:
                     # ADX 라인
