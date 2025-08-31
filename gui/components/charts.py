@@ -301,40 +301,51 @@ async def create_price_chart(state):
             vwap_history = await get_vwap_history_from_db(len(times))
             
             if vwap_history:
-                # ADX 데이터 추출 (로컬타임으로 변환)
+                # 기존 align 함수를 사용하여 시간 정렬 (VWAP는 무시하고 시간만 사용)
+                aligned_times, _, _, _ = align_vwap_with_chart_times(times, vwap_history)
+                
+                # 정렬된 시간에 맞는 ADX 값들 추출
                 adx_times = []
                 adx_values = []
                 
-                for item in vwap_history:
-                    if item['adx'] is not None:
-                        timestamp_str = item['timestamp']
+                # vwap_history를 시간 기준으로 딕셔너리로 변환
+                vwap_data = {}
+                for entry in vwap_history:
+                    timestamp_str = entry['timestamp']
+                    try:
+                        # SQLite datetime을 파싱 (UTC 시간으로 가정)
+                        dt = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+                        if dt.tzinfo is None:
+                            dt = dt.replace(tzinfo=timezone.utc)
+                        # 로컬 타임으로 변환
+                        dt = dt.astimezone()
+                        vwap_data[dt] = entry
+                    except:
+                        # 다른 형식 시도
                         try:
-                            # SQLite datetime을 파싱 (UTC 시간으로 가정)
-                            dt = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
-                            if dt.tzinfo is None:
-                                dt = dt.replace(tzinfo=timezone.utc)
-                            # 로컬 타임으로 변환
-                            local_dt = dt.astimezone()
-                            adx_times.append(local_dt)
-                            adx_values.append(item['adx'])
+                            # UTC 시간으로 가정하고 로컬 타임으로 변환
+                            dt = datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
+                            dt = dt.replace(tzinfo=timezone.utc).astimezone()
+                            vwap_data[dt] = entry
                         except:
-                            # 다른 형식 시도
-                            try:
-                                # UTC 시간으로 가정하고 로컬 타임으로 변환
-                                dt = datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
-                                dt = dt.replace(tzinfo=timezone.utc).astimezone()
-                                adx_times.append(dt)
-                                adx_values.append(item['adx'])
-                            except:
-                                continue
+                            continue
                 
-                valid_adx_times = adx_times
+                # 차트 시간 범위에 맞는 ADX 데이터만 추출
+                chart_start = min(times)
+                chart_end = max(times)
                 
-                if adx_values and valid_adx_times:
+                for dt, entry in sorted(vwap_data.items()):
+                    # 차트 시간 범위 ±10분 내의 데이터만 사용하고 ADX가 있는 것만
+                    if (chart_start - timedelta(minutes=10) <= dt <= chart_end + timedelta(minutes=10) 
+                        and entry['adx'] is not None):
+                        adx_times.append(dt)
+                        adx_values.append(entry['adx'])
+                
+                if adx_values and adx_times:
                     # ADX 라인
                     fig.add_trace(
                         go.Scatter(
-                            x=valid_adx_times,
+                            x=adx_times,
                             y=adx_values,
                             mode='lines+markers',
                             name='ADX',
@@ -345,10 +356,10 @@ async def create_price_chart(state):
                     )
                     
                     # 현재 ADX 값 강조 표시
-                    if hasattr(state, 'adx') and state.adx and valid_adx_times:
+                    if hasattr(state, 'adx') and state.adx and adx_times:
                         fig.add_trace(
                             go.Scatter(
-                                x=[valid_adx_times[-1]],
+                                x=[adx_times[-1]],
                                 y=[state.adx],
                                 mode='markers',
                                 name='현재 ADX',
