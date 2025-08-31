@@ -197,12 +197,12 @@ async def create_price_chart(state):
                 if lows[i] <= 0:
                     lows[i] = state.current_price
         
-        # 차트 생성
+        # 차트 생성 (3행: 캔들스틱, 거래량, ADX)
         fig = make_subplots(
-            rows=2, cols=1,
-            subplot_titles=("캔들스틱 차트", "거래량"),
-            vertical_spacing=0.1,
-            row_heights=[0.7, 0.3]
+            rows=3, cols=1,
+            subplot_titles=("캔들스틱 차트", "거래량", "ADX 추세 강도"),
+            vertical_spacing=0.08,
+            row_heights=[0.6, 0.2, 0.2]
         )
         
         # 캔들스틱 차트
@@ -295,17 +295,84 @@ async def create_price_chart(state):
             row=2, col=1
         )
         
+        # ADX 보조 차트 추가
+        try:
+            # DB에서 ADX 히스토리 가져오기
+            vwap_history = await get_vwap_history_from_db(len(times))
+            
+            if vwap_history:
+                # ADX 데이터 추출
+                adx_times = [pd.to_datetime(item['timestamp']) for item in vwap_history]
+                adx_values = [item['adx'] for item in vwap_history if item['adx'] is not None]
+                valid_adx_times = [adx_times[i] for i, item in enumerate(vwap_history) if item['adx'] is not None]
+                
+                if adx_values and valid_adx_times:
+                    # ADX 라인
+                    fig.add_trace(
+                        go.Scatter(
+                            x=valid_adx_times,
+                            y=adx_values,
+                            mode='lines+markers',
+                            name='ADX',
+                            line=dict(color='#2E86AB', width=2),
+                            marker=dict(size=3)
+                        ),
+                        row=3, col=1
+                    )
+                    
+                    # 현재 ADX 값 강조 표시
+                    if hasattr(state, 'adx') and state.adx and valid_adx_times:
+                        fig.add_trace(
+                            go.Scatter(
+                                x=[valid_adx_times[-1]],
+                                y=[state.adx],
+                                mode='markers',
+                                name='현재 ADX',
+                                marker=dict(size=8, color='red', symbol='circle')
+                            ),
+                            row=3, col=1
+                        )
+                    
+                    # ADX 임계선들
+                    fig.add_hline(y=20, line_dash="dash", line_color="orange", 
+                                annotation_text="추세 발생 (20)", row=3, col=1)
+                    fig.add_hline(y=40, line_dash="dash", line_color="red", 
+                                annotation_text="강한 추세 (40)", row=3, col=1)
+                    
+                    # ADX Y축 범위 설정
+                    fig.update_yaxes(range=[0, max(50, max(adx_values) * 1.1)], row=3, col=1)
+                else:
+                    # ADX 데이터가 없는 경우 현재값만 표시
+                    if hasattr(state, 'adx') and state.adx:
+                        fig.add_trace(
+                            go.Scatter(
+                                x=[times[-1]] if times else [pd.Timestamp.now()],
+                                y=[state.adx],
+                                mode='markers',
+                                name='현재 ADX',
+                                marker=dict(size=10, color='red', symbol='circle')
+                            ),
+                            row=3, col=1
+                        )
+                        fig.add_hline(y=20, line_dash="dash", line_color="orange", row=3, col=1)
+                        fig.add_hline(y=40, line_dash="dash", line_color="red", row=3, col=1)
+                        fig.update_yaxes(range=[0, 50], row=3, col=1)
+            
+        except Exception as e:
+            from utils.logger import log
+            log.error(f"Error adding ADX subchart: {e}")
+        
         # 레이아웃 설정
         fig.update_layout(
-            height=600,
-            title_text=f"{state.strategy_type} 전략 - 캔들스틱 차트",
+            height=800,  # 높이 증가 (ADX 차트 추가로)
+            title_text=f"{state.strategy_type} 전략 - 캔들스틱 차트 + ADX",
             showlegend=True,
             xaxis_rangeslider_visible=False,
             template="plotly_white"
         )
         
         # X축 설정
-        fig.update_xaxes(title_text="시간", row=2, col=1)
+        fig.update_xaxes(title_text="시간", row=3, col=1)
         
         # Y축 설정 - 캔들 데이터의 고가/저가를 기준으로 범위 설정
         all_highs = [h for h in highs if h > 0]
@@ -332,6 +399,7 @@ async def create_price_chart(state):
             )
         
         fig.update_yaxes(title_text="거래량", row=2, col=1)
+        fig.update_yaxes(title_text="ADX", row=3, col=1)
         
         return fig
         
@@ -420,175 +488,5 @@ def create_pnl_chart(closed_positions):
     fig.update_yaxes(title_text="누적 PnL ($)", row=1, col=1)
     fig.update_yaxes(title_text="개별 PnL ($)", row=2, col=1)
     fig.update_xaxes(title_text="시간", row=2, col=1)
-    
-    return fig
-
-def create_strategy_indicator_chart(state):
-    """전략별 지표 차트"""
-    
-    if state.strategy_type == "VWAP":
-        return create_vwap_indicator_chart(state)
-    else:  # OBI
-        return create_obi_indicator_chart(state)
-
-def create_vwap_indicator_chart(state):
-    """VWAP 지표 차트"""
-    
-    # Create subplots: ADX gauge on top, ADX trend chart below
-    fig = make_subplots(
-        rows=2, cols=1,
-        row_heights=[0.4, 0.6],
-        vertical_spacing=0.1,
-        subplot_titles=('ADX 현재값', 'ADX 추세'),
-        specs=[[{"type": "indicator"}],
-               [{"type": "scatter"}]]
-    )
-    
-    # ADX 게이지 차트 (상단)
-    fig.add_trace(go.Indicator(
-        mode = "gauge+number+delta",
-        value = state.adx,
-        title = {'text': "ADX (추세 강도)"},
-        delta = {'reference': 20},
-        gauge = {
-            'axis': {'range': [None, 50]},
-            'bar': {'color': "darkblue"},
-            'steps': [
-                {'range': [0, 20], 'color': "lightgray"},
-                {'range': [20, 40], 'color': "yellow"},
-                {'range': [40, 50], 'color': "red"}
-            ],
-            'threshold': {
-                'line': {'color': "red", 'width': 4},
-                'thickness': 0.75,
-                'value': 40
-            }
-        }
-    ), row=1, col=1)
-    
-    # ADX 추세 라인 차트 (하단)
-    try:
-        import asyncio
-        history = asyncio.run(get_vwap_history_from_db(50))
-        
-        if history and len(history) > 1:
-            timestamps = [pd.to_datetime(item['timestamp']) for item in history]
-            adx_values = [item['adx'] for item in history if item['adx'] is not None]
-            valid_timestamps = [timestamps[i] for i, item in enumerate(history) if item['adx'] is not None]
-            
-            if adx_values:
-                # ADX 추세선
-                fig.add_trace(go.Scatter(
-                    x=valid_timestamps,
-                    y=adx_values,
-                    mode='lines+markers',
-                    name='ADX',
-                    line=dict(color='blue', width=2),
-                    marker=dict(size=4)
-                ), row=2, col=1)
-                
-                # 임계선들 추가
-                fig.add_hline(y=20, line_dash="dash", line_color="orange", 
-                            annotation_text="추세 발생 (20)", row=2, col=1)
-                fig.add_hline(y=40, line_dash="dash", line_color="red", 
-                            annotation_text="강한 추세 (40)", row=2, col=1)
-                
-                # Y축 범위 설정
-                fig.update_yaxes(range=[0, max(50, max(adx_values) * 1.1)], row=2, col=1)
-            
-    except Exception as e:
-        from utils.logger import log
-        log.error(f"Error creating ADX trend chart: {e}")
-    
-    fig.update_layout(
-        height=600, 
-        title="VWAP 전략 지표",
-        showlegend=False
-    )
-    
-    return fig
-
-def create_obi_indicator_chart(state):
-    """OBI 지표 차트"""
-    
-    # Create subplots: OBI gauge on left, ADX trend chart on right
-    fig = make_subplots(
-        rows=1, cols=2,
-        column_widths=[0.5, 0.5],
-        horizontal_spacing=0.1,
-        subplot_titles=('OBI 호가 불균형', 'ADX 추세'),
-        specs=[[{"type": "indicator"}, {"type": "scatter"}]]
-    )
-    
-    # OBI 게이지 차트 (좌측)
-    fig.add_trace(go.Indicator(
-        mode = "gauge+number",
-        value = state.obi_value,
-        title = {'text': "OBI (호가 불균형)"},
-        gauge = {
-            'axis': {'range': [0, 1]},
-            'bar': {'color': "darkblue"},
-            'steps': [
-                {'range': [0, 0.3], 'color': "red"},
-                {'range': [0.3, 0.7], 'color': "lightgray"},
-                {'range': [0.7, 1], 'color': "green"}
-            ],
-            'threshold': {
-                'line': {'color': "black", 'width': 4},
-                'thickness': 0.75,
-                'value': 0.5
-            }
-        }
-    ), row=1, col=1)
-    
-    # ADX 추세 라인 차트 (우측)
-    try:
-        import asyncio
-        history = asyncio.run(get_vwap_history_from_db(50))
-        
-        if history and len(history) > 1:
-            timestamps = [pd.to_datetime(item['timestamp']) for item in history]
-            adx_values = [item['adx'] for item in history if item['adx'] is not None]
-            valid_timestamps = [timestamps[i] for i, item in enumerate(history) if item['adx'] is not None]
-            
-            if adx_values:
-                # ADX 추세선
-                fig.add_trace(go.Scatter(
-                    x=valid_timestamps,
-                    y=adx_values,
-                    mode='lines+markers',
-                    name='ADX',
-                    line=dict(color='blue', width=2),
-                    marker=dict(size=4)
-                ), row=1, col=2)
-                
-                # 임계선들 추가
-                fig.add_hline(y=20, line_dash="dash", line_color="orange", 
-                            annotation_text="추세 발생 (20)", row=1, col=2)
-                fig.add_hline(y=40, line_dash="dash", line_color="red", 
-                            annotation_text="강한 추세 (40)", row=1, col=2)
-                
-                # Y축 범위 설정
-                fig.update_yaxes(range=[0, max(50, max(adx_values) * 1.1)], row=1, col=2)
-                
-                # 현재 ADX 값을 점으로 표시
-                if state.adx and valid_timestamps:
-                    fig.add_trace(go.Scatter(
-                        x=[valid_timestamps[-1]],
-                        y=[state.adx],
-                        mode='markers',
-                        name='현재 ADX',
-                        marker=dict(size=10, color='red', symbol='circle')
-                    ), row=1, col=2)
-            
-    except Exception as e:
-        from utils.logger import log
-        log.error(f"Error creating ADX trend chart: {e}")
-    
-    fig.update_layout(
-        height=400, 
-        title="OBI 전략 지표",
-        showlegend=False
-    )
     
     return fig
