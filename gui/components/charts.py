@@ -207,6 +207,7 @@ async def create_price_chart(state):
             subplot_titles=("캔들스틱 차트", "거래량"),
             vertical_spacing=0.1,
             row_heights=[0.7, 0.3],
+            shared_xaxes=True,  # X축 공유로 타임라인 동기화
             specs=[[{"secondary_y": True}], 
                    [{"secondary_y": False}]]
         )
@@ -498,8 +499,7 @@ def _configure_chart_layout(fig, state, highs, lows):
         template="plotly_white"
     )
     
-    # X축 설정
-    fig.update_xaxes(title_text="시간", row=2, col=1)
+    # X축 설정은 아래 공통 설정에서 처리
     
     # Y축 설정 - 캔들 데이터의 고가/저가를 기준으로 범위 설정
     all_highs = [h for h in highs if h > 0]
@@ -533,10 +533,31 @@ def _configure_chart_layout(fig, state, highs, lows):
     # 거래량 차트 Y축 설정
     fig.update_yaxes(title_text="거래량", row=2, col=1, autorange=True)
     
-    # 초기 표시 범위 설정 (줌 레벨)
+    # X축 공통 설정 (shared_xaxes로 인해 자동 동기화됨)
     fig.update_layout(
-        xaxis=dict(autorange=True),
-        xaxis2=dict(autorange=True)
+        xaxis_rangeslider_visible=False,  # 범위 슬라이더 비활성화
+        showlegend=True
+    )
+    
+    # 상단 차트 X축 설정 (공유 X축의 마스터)
+    fig.update_xaxes(
+        showticklabels=False,  # 상단 차트는 X축 레이블 숨김
+        showspikes=True,
+        spikemode='across',
+        spikesnap='cursor',
+        row=1, col=1
+    )
+    
+    # 하단 차트 X축 설정 (X축 레이블 표시)
+    fig.update_xaxes(
+        showticklabels=True,
+        tickangle=-45,
+        nticks=10,
+        showspikes=True,
+        spikemode='across',
+        spikesnap='cursor',
+        title_text="시간",
+        row=2, col=1
     )
 
 def create_pnl_chart(closed_positions):
