@@ -99,7 +99,7 @@ class PositionManager:
             await db.commit()
 
         # 2) 백그라운드 모니터링 태스크 시작
-        self._task = asyncio.create_task(self._monitor_positions())
+        self._task = asyncio.create_task(self._monitor_positions(), name="PositionMonitor")
         log.info("[PositionManager] Initialized and monitor task started")
 
     async def register_order(self, order: Dict, strategy_type: str = None, vwap_at_entry: float = None):

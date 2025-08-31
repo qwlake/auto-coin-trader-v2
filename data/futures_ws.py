@@ -105,12 +105,12 @@ class EnhancedFuturesStream:
                 
                 # Start health monitoring
                 self._monitoring_active = True
-                self._health_monitor_task = asyncio.create_task(self._monitor_connection_health())
+                self._health_monitor_task = asyncio.create_task(self._monitor_connection_health(), name="HealthMonitor")
                 
                 # Create concurrent stream tasks
-                self.depth_task = asyncio.create_task(self._run_depth_stream(bm))
-                self.trade_task = asyncio.create_task(self._run_trade_stream(bm))
-                self.kline_task = asyncio.create_task(self._run_kline_stream(bm))
+                self.depth_task = asyncio.create_task(self._run_depth_stream(bm), name="DepthStream")
+                self.trade_task = asyncio.create_task(self._run_trade_stream(bm), name="TradeStream")
+                self.kline_task = asyncio.create_task(self._run_kline_stream(bm), name="KlineStream")
                 
                 log.info(f"[EnhancedFuturesStream] All streams started for {self.symbol}")
                 
@@ -378,7 +378,7 @@ class EnhancedFuturesStream:
                 # 비동기 태스크로 실행하여 GUI 스레드 차단 방지
                 asyncio.create_task(self._save_vwap_to_db(
                     settings.SYMBOL, vwap, upper_band, lower_band, self.current_price, adx
-                ))
+                ), name="VWAPDataSaver")
                 log.debug(f"[VWAPHistory] Saving VWAP data: vwap={vwap:.2f}, adx={adx}")
             except Exception as e:
                 log.error(f"Failed to save VWAP history: {e}")
