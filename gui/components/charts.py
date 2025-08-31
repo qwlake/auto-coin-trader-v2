@@ -451,7 +451,9 @@ def _add_adx_overlay(fig, state, indicator_data):
                 range=[0, max(50, max(adx_values) * 1.1)],
                 showgrid=False,
                 secondary_y=True,
-                row=1, col=1
+                row=1, col=1,
+                autorange=False,  # 자동 범위 비활성화
+                fixedrange=False  # 줌 허용
             )
         else:
             # ADX 데이터가 없는 경우 현재값만 표시
@@ -475,7 +477,9 @@ def _add_adx_overlay(fig, state, indicator_data):
                     range=[0, 50],
                     showgrid=False,
                     secondary_y=True,
-                    row=1, col=1
+                    row=1, col=1,
+                    autorange=False,  # 자동 범위 비활성화
+                    fixedrange=False  # 줌 허용
                 )
         
     except Exception as e:
@@ -507,10 +511,13 @@ def _configure_chart_layout(fig, state, highs, lows):
         price_range = price_max - price_min
         y_margin = price_range * 0.05  # 5% 여백
         
+        # Primary Y축 (가격) 설정
         fig.update_yaxes(
             title_text="가격 ($)", 
             row=1, col=1,
-            range=[price_min - y_margin, price_max + y_margin]
+            secondary_y=False,
+            range=[price_min - y_margin, price_max + y_margin],
+            autorange=False  # 자동 범위 비활성화
         )
     else:
         # 폴백: 현재 가격 주변으로 설정
@@ -518,10 +525,19 @@ def _configure_chart_layout(fig, state, highs, lows):
         fig.update_yaxes(
             title_text="가격 ($)", 
             row=1, col=1,
-            range=[current_price * 0.99, current_price * 1.01]
+            secondary_y=False,
+            range=[current_price * 0.99, current_price * 1.01],
+            autorange=False  # 자동 범위 비활성화
         )
     
-    fig.update_yaxes(title_text="거래량", row=2, col=1)
+    # 거래량 차트 Y축 설정
+    fig.update_yaxes(title_text="거래량", row=2, col=1, autorange=True)
+    
+    # 초기 표시 범위 설정 (줌 레벨)
+    fig.update_layout(
+        xaxis=dict(autorange=True),
+        xaxis2=dict(autorange=True)
+    )
 
 def create_pnl_chart(closed_positions):
     """PnL 누적 차트 생성"""
