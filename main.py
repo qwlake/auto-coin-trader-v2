@@ -132,7 +132,34 @@ def _kill(loop: asyncio.AbstractEventLoop):
 async def monitor_tasks():
     while True:
         all_tasks = asyncio.all_tasks()
-        log.info(f"[TaskMonitor] Total tasks: {len(all_tasks)}, running: {[t.get_name() for t in all_tasks]}")
+        
+        # Categorize tasks by name
+        named_tasks = []
+        unnamed_task_info = []
+        
+        for task in all_tasks:
+            name = task.get_name()
+            if name.startswith('Task-'):
+                # Get coroutine info for unnamed tasks
+                coro = task.get_coro()
+                coro_name = coro.__name__ if hasattr(coro, '__name__') else str(coro)
+                
+                # Try to get filename from coroutine
+                try:
+                    filename = coro.cr_frame.f_code.co_filename if hasattr(coro, 'cr_frame') else 'unknown'
+                    filename = filename.split('/')[-1] if '/' in filename else filename  # Just filename, not full path
+                    unnamed_task_info.append(f"{name}({coro_name}@{filename})")
+                except:
+                    unnamed_task_info.append(f"{name}({coro_name})")
+            else:
+                named_tasks.append(name)
+        
+        # Create informative log message
+        if unnamed_task_info:
+            log.info(f"[TaskMonitor] Total: {len(all_tasks)} | Named: {named_tasks} | Unnamed: {unnamed_task_info}")
+        else:
+            log.info(f"[TaskMonitor] Total: {len(all_tasks)} | Running: {named_tasks}")
+        
         await asyncio.sleep(5)
 
 if __name__ == '__main__':
