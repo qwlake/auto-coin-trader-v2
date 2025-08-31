@@ -179,10 +179,10 @@ async def create_price_chart(state):
         if state.current_price <= 0:
             return None
         
-        # 실제 OHLCV 데이터 가져오기
+        # 1. 기본 데이터 준비
         times, opens, highs, lows, closes, volumes = await get_real_ohlcv_data(state)
         
-        # 데이터 검증
+        # 데이터 검증 및 정리
         if any(p <= 0 for p in closes):
             from utils.logger import log
             log.warning("Found non-positive prices in closes")
@@ -197,7 +197,10 @@ async def create_price_chart(state):
                 if lows[i] <= 0:
                     lows[i] = state.current_price
         
-        # 차트 생성 (3행: 캔들스틱, 거래량, ADX)
+        # 2. 보조 지표 데이터 준비
+        indicator_data = await _prepare_indicator_data(state, times)
+        
+        # 3. 차트 레이아웃 생성
         fig = make_subplots(
             rows=3, cols=1,
             subplot_titles=("캔들스틱 차트", "거래량", "ADX 추세 강도"),
@@ -205,33 +208,135 @@ async def create_price_chart(state):
             row_heights=[0.6, 0.2, 0.2]
         )
         
-        # 캔들스틱 차트
-        fig.add_trace(
-            go.Candlestick(
-                x=times,
-                open=opens,
-                high=highs,
-                low=lows,
-                close=closes,
-                name='OHLC',
-                increasing_line_color='#26A69A',
-                decreasing_line_color='#EF5350'
-            ),
-            row=1, col=1
-        )
+        # 4. 메인 캔들스틱 차트 추가
+        _add_candlestick_chart(fig, times, opens, highs, lows, closes)
         
-        # VWAP 전략의 경우 추가 지표 표시 (히스토리 데이터 사용)
-        if state.strategy_type == "VWAP" and hasattr(state, 'vwap') and state.vwap > 0:
-            # DB에서 VWAP 히스토리 가져오기
-            vwap_history = await get_vwap_history_from_db(len(times))
+        # 5. 전략별 보조 지표 추가 (캔들스틱 차트에 오버레이)
+        _add_strategy_indicators(fig, state, indicator_data, times)
+        
+        # 6. 거래량 차트 추가
+        _add_volume_chart(fig, times, volumes)
+        
+        # 7. ADX 차트 추가
+        _add_adx_chart(fig, state, indicator_data)
+        
+        # 8. 차트 레이아웃 및 축 설정
+        _configure_chart_layout(fig, state, highs, lows)
+        
+        return fig
+        
+    except Exception as e:
+        from utils.logger import log
+        log.error(f"Error creating price chart: {e}")
+        log.debug(f"State data: current_price={getattr(state, 'current_price', 'N/A')}, strategy_type={getattr(state, 'strategy_type', 'N/A')}")
+        log.exception("Chart creation error details:")
+        return None
+
+
+async def _prepare_indicator_data(state, chart_times):
+    """보조 지표 데이터 준비"""
+    indicator_data = {
+        'vwap_history': None,
+        'adx_times': [],
+        'adx_values': []
+    }
+    
+    try:
+        # VWAP 히스토리 데이터 가져오기
+        vwap_history = await get_vwap_history_from_db(len(chart_times))
+        indicator_data['vwap_history'] = vwap_history
+        
+        # ADX 데이터 추출 및 시간 정렬
+        if vwap_history:
+            adx_times, adx_values = _extract_adx_data(vwap_history, chart_times)
+            indicator_data['adx_times'] = adx_times
+            indicator_data['adx_values'] = adx_values
             
-            if vwap_history:
-                # 히스토리 데이터를 차트 시간에 맞춰 정렬
-                vwap_times, vwap_values, upper_values, lower_values = align_vwap_with_chart_times(
-                    times, vwap_history
-                )
-                
-                # VWAP 라인 (실제 히스토리 데이터)
+    except Exception as e:
+        from utils.logger import log
+        log.error(f"Error preparing indicator data: {e}")
+    
+    return indicator_data
+
+
+def _extract_adx_data(vwap_history, chart_times):
+    """ADX 데이터 추출 및 시간 정렬"""
+    adx_times = []
+    adx_values = []
+    
+    # vwap_history를 시간 기준으로 딕셔너리로 변환
+    vwap_data = {}
+    for entry in vwap_history:
+        timestamp_str = entry['timestamp']
+        try:
+            # SQLite datetime을 파싱 (UTC 시간으로 가정)
+            dt = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            # 로컬 타임으로 변환
+            dt = dt.astimezone()
+            vwap_data[dt] = entry
+        except:
+            # 다른 형식 시도
+            try:
+                # UTC 시간으로 가정하고 로컬 타임으로 변환
+                dt = datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
+                dt = dt.replace(tzinfo=timezone.utc).astimezone()
+                vwap_data[dt] = entry
+            except:
+                continue
+    
+    # 차트 시간 범위에 맞는 ADX 데이터만 추출
+    if chart_times:
+        chart_start = min(chart_times)
+        chart_end = max(chart_times)
+        
+        for dt, entry in sorted(vwap_data.items()):
+            # 차트 시간 범위 ±10분 내의 데이터만 사용하고 ADX가 있는 것만
+            if (chart_start - timedelta(minutes=10) <= dt <= chart_end + timedelta(minutes=10) 
+                and entry['adx'] is not None):
+                adx_times.append(dt)
+                adx_values.append(entry['adx'])
+    
+    return adx_times, adx_values
+
+
+def _add_candlestick_chart(fig, times, opens, highs, lows, closes):
+    """캔들스틱 차트 추가"""
+    fig.add_trace(
+        go.Candlestick(
+            x=times,
+            open=opens,
+            high=highs,
+            low=lows,
+            close=closes,
+            name='OHLC',
+            increasing_line_color='#26A69A',
+            decreasing_line_color='#EF5350'
+        ),
+        row=1, col=1
+    )
+
+
+def _add_strategy_indicators(fig, state, indicator_data, chart_times):
+    """전략별 보조 지표 추가 (캔들스틱 차트에 오버레이)"""
+    if state.strategy_type == "VWAP" and hasattr(state, 'vwap') and state.vwap > 0:
+        _add_vwap_indicators(fig, state, indicator_data, chart_times)
+
+
+def _add_vwap_indicators(fig, state, indicator_data, chart_times):
+    """VWAP 지표들 추가"""
+    vwap_history = indicator_data.get('vwap_history')
+    
+    if vwap_history:
+        # 히스토리 데이터를 차트 시간에 맞춰 정렬
+        try:
+            vwap_times, vwap_values, upper_values, lower_values = align_vwap_with_chart_times(
+                chart_times, vwap_history
+            )
+            
+            if vwap_values:
+                # VWAP 라인
                 fig.add_trace(
                     go.Scatter(
                         x=vwap_times,
@@ -243,7 +348,7 @@ async def create_price_chart(state):
                     row=1, col=1
                 )
                 
-                # 상단/하단 밴드 (실제 히스토리 데이터)
+                # 상단/하단 밴드
                 if upper_values and lower_values:
                     fig.add_trace(
                         go.Scatter(
@@ -270,180 +375,142 @@ async def create_price_chart(state):
                         ),
                         row=1, col=1
                     )
-            else:
-                # 폴백: 현재 값으로 평평한 라인 (히스토리가 없는 경우)
-                vwap_line = [state.vwap] * len(times)
-                fig.add_trace(
-                    go.Scatter(
-                        x=times,
-                        y=vwap_line,
-                        mode='lines',
-                        name='VWAP (현재)',
-                        line=dict(color='#F18F01', width=2, dash='dash')
-                    ),
-                    row=1, col=1
-                )
-        
-        # 실제 거래량 데이터 사용
-        fig.add_trace(
-            go.Bar(
-                x=times,
-                y=volumes,
-                name='거래량',
-                marker_color='rgba(46, 134, 171, 0.6)'
-            ),
-            row=2, col=1
-        )
-        
-        # ADX 보조 차트 추가
-        try:
-            # DB에서 ADX 히스토리 가져오기
-            vwap_history = await get_vwap_history_from_db(len(times))
-            
-            if vwap_history:
-                # 기존 align 함수를 사용하여 시간 정렬 (VWAP는 무시하고 시간만 사용)
-                aligned_times, _, _, _ = align_vwap_with_chart_times(times, vwap_history)
-                
-                # 정렬된 시간에 맞는 ADX 값들 추출
-                adx_times = []
-                adx_values = []
-                
-                # vwap_history를 시간 기준으로 딕셔너리로 변환
-                vwap_data = {}
-                for entry in vwap_history:
-                    timestamp_str = entry['timestamp']
-                    try:
-                        # SQLite datetime을 파싱 (UTC 시간으로 가정)
-                        dt = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
-                        if dt.tzinfo is None:
-                            dt = dt.replace(tzinfo=timezone.utc)
-                        # 로컬 타임으로 변환
-                        dt = dt.astimezone()
-                        vwap_data[dt] = entry
-                    except:
-                        # 다른 형식 시도
-                        try:
-                            # UTC 시간으로 가정하고 로컬 타임으로 변환
-                            dt = datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
-                            dt = dt.replace(tzinfo=timezone.utc).astimezone()
-                            vwap_data[dt] = entry
-                        except:
-                            continue
-                
-                # 차트 시간 범위에 맞는 ADX 데이터만 추출
-                chart_start = min(times)
-                chart_end = max(times)
-                
-                for dt, entry in sorted(vwap_data.items()):
-                    # 차트 시간 범위 ±10분 내의 데이터만 사용하고 ADX가 있는 것만
-                    if (chart_start - timedelta(minutes=10) <= dt <= chart_end + timedelta(minutes=10) 
-                        and entry['adx'] is not None):
-                        adx_times.append(dt)
-                        adx_values.append(entry['adx'])
-                
-                if adx_values and adx_times:
-                    # ADX 라인
-                    fig.add_trace(
-                        go.Scatter(
-                            x=adx_times,
-                            y=adx_values,
-                            mode='lines+markers',
-                            name='ADX',
-                            line=dict(color='#2E86AB', width=2),
-                            marker=dict(size=3)
-                        ),
-                        row=3, col=1
-                    )
-                    
-                    # 현재 ADX 값 강조 표시
-                    if hasattr(state, 'adx') and state.adx and adx_times:
-                        fig.add_trace(
-                            go.Scatter(
-                                x=[adx_times[-1]],
-                                y=[state.adx],
-                                mode='markers',
-                                name='현재 ADX',
-                                marker=dict(size=8, color='red', symbol='circle')
-                            ),
-                            row=3, col=1
-                        )
-                    
-                    # ADX 임계선들
-                    fig.add_hline(y=20, line_dash="dash", line_color="orange", 
-                                annotation_text="추세 발생 (20)", row=3, col=1)
-                    fig.add_hline(y=40, line_dash="dash", line_color="red", 
-                                annotation_text="강한 추세 (40)", row=3, col=1)
-                    
-                    # ADX Y축 범위 설정
-                    fig.update_yaxes(range=[0, max(50, max(adx_values) * 1.1)], row=3, col=1)
-                else:
-                    # ADX 데이터가 없는 경우 현재값만 표시
-                    if hasattr(state, 'adx') and state.adx:
-                        fig.add_trace(
-                            go.Scatter(
-                                x=[times[-1]] if times else [pd.Timestamp.now()],
-                                y=[state.adx],
-                                mode='markers',
-                                name='현재 ADX',
-                                marker=dict(size=10, color='red', symbol='circle')
-                            ),
-                            row=3, col=1
-                        )
-                        fig.add_hline(y=20, line_dash="dash", line_color="orange", row=3, col=1)
-                        fig.add_hline(y=40, line_dash="dash", line_color="red", row=3, col=1)
-                        fig.update_yaxes(range=[0, 50], row=3, col=1)
-            
         except Exception as e:
             from utils.logger import log
-            log.error(f"Error adding ADX subchart: {e}")
-        
-        # 레이아웃 설정
-        fig.update_layout(
-            height=800,  # 높이 증가 (ADX 차트 추가로)
-            title_text=f"{state.strategy_type} 전략 - 캔들스틱 차트 + ADX",
-            showlegend=True,
-            xaxis_rangeslider_visible=False,
-            template="plotly_white"
-        )
-        
-        # X축 설정
-        fig.update_xaxes(title_text="시간", row=3, col=1)
-        
-        # Y축 설정 - 캔들 데이터의 고가/저가를 기준으로 범위 설정
-        all_highs = [h for h in highs if h > 0]
-        all_lows = [l for l in lows if l > 0]
-        
-        if all_highs and all_lows:
-            price_max = max(all_highs)
-            price_min = min(all_lows)
-            price_range = price_max - price_min
-            y_margin = price_range * 0.05  # 5% 여백
+            log.error(f"Error adding VWAP indicators: {e}")
+    
+    else:
+        # 폴백: 현재 값으로 평평한 라인 (히스토리가 없는 경우)
+        if chart_times and state.vwap > 0:
+            vwap_line = [state.vwap] * len(chart_times)
+            fig.add_trace(
+                go.Scatter(
+                    x=chart_times,
+                    y=vwap_line,
+                    mode='lines',
+                    name='VWAP (현재)',
+                    line=dict(color='#F18F01', width=2, dash='dash')
+                ),
+                row=1, col=1
+            )
+
+
+def _add_volume_chart(fig, times, volumes):
+    """거래량 차트 추가"""
+    fig.add_trace(
+        go.Bar(
+            x=times,
+            y=volumes,
+            name='거래량',
+            marker_color='rgba(46, 134, 171, 0.6)'
+        ),
+        row=2, col=1
+    )
+
+
+def _add_adx_chart(fig, state, indicator_data):
+    """ADX 차트 추가"""
+    adx_times = indicator_data.get('adx_times', [])
+    adx_values = indicator_data.get('adx_values', [])
+    
+    try:
+        if adx_values and adx_times:
+            # ADX 라인
+            fig.add_trace(
+                go.Scatter(
+                    x=adx_times,
+                    y=adx_values,
+                    mode='lines+markers',
+                    name='ADX',
+                    line=dict(color='#2E86AB', width=2),
+                    marker=dict(size=3)
+                ),
+                row=3, col=1
+            )
             
-            fig.update_yaxes(
-                title_text="가격 ($)", 
-                row=1, col=1,
-                range=[price_min - y_margin, price_max + y_margin]
-            )
+            # 현재 ADX 값 강조 표시
+            if hasattr(state, 'adx') and state.adx and adx_times:
+                fig.add_trace(
+                    go.Scatter(
+                        x=[adx_times[-1]],
+                        y=[state.adx],
+                        mode='markers',
+                        name='현재 ADX',
+                        marker=dict(size=8, color='red', symbol='circle')
+                    ),
+                    row=3, col=1
+                )
+            
+            # ADX 임계선들
+            fig.add_hline(y=20, line_dash="dash", line_color="orange", 
+                        annotation_text="추세 발생 (20)", row=3, col=1)
+            fig.add_hline(y=40, line_dash="dash", line_color="red", 
+                        annotation_text="강한 추세 (40)", row=3, col=1)
+            
+            # ADX Y축 범위 설정
+            fig.update_yaxes(range=[0, max(50, max(adx_values) * 1.1)], row=3, col=1)
         else:
-            # 폴백: 현재 가격 주변으로 설정
-            current_price = state.current_price
-            fig.update_yaxes(
-                title_text="가격 ($)", 
-                row=1, col=1,
-                range=[current_price * 0.99, current_price * 1.01]
-            )
-        
-        fig.update_yaxes(title_text="거래량", row=2, col=1)
-        fig.update_yaxes(title_text="ADX", row=3, col=1)
-        
-        return fig
+            # ADX 데이터가 없는 경우 현재값만 표시
+            if hasattr(state, 'adx') and state.adx:
+                fig.add_trace(
+                    go.Scatter(
+                        x=[pd.Timestamp.now()],
+                        y=[state.adx],
+                        mode='markers',
+                        name='현재 ADX',
+                        marker=dict(size=10, color='red', symbol='circle')
+                    ),
+                    row=3, col=1
+                )
+                fig.add_hline(y=20, line_dash="dash", line_color="orange", row=3, col=1)
+                fig.add_hline(y=40, line_dash="dash", line_color="red", row=3, col=1)
+                fig.update_yaxes(range=[0, 50], row=3, col=1)
         
     except Exception as e:
         from utils.logger import log
-        log.error(f"Error creating price chart: {e}")
-        log.debug(f"State data: current_price={getattr(state, 'current_price', 'N/A')}, strategy_type={getattr(state, 'strategy_type', 'N/A')}")
-        log.exception("Chart creation error details:")
-        return None
+        log.error(f"Error adding ADX chart: {e}")
+
+
+def _configure_chart_layout(fig, state, highs, lows):
+    """차트 레이아웃 및 축 설정"""
+    # 레이아웃 설정
+    fig.update_layout(
+        height=800,
+        title_text=f"{state.strategy_type} 전략 - 캔들스틱 차트 + ADX",
+        showlegend=True,
+        xaxis_rangeslider_visible=False,
+        template="plotly_white"
+    )
+    
+    # X축 설정
+    fig.update_xaxes(title_text="시간", row=3, col=1)
+    
+    # Y축 설정 - 캔들 데이터의 고가/저가를 기준으로 범위 설정
+    all_highs = [h for h in highs if h > 0]
+    all_lows = [l for l in lows if l > 0]
+    
+    if all_highs and all_lows:
+        price_max = max(all_highs)
+        price_min = min(all_lows)
+        price_range = price_max - price_min
+        y_margin = price_range * 0.05  # 5% 여백
+        
+        fig.update_yaxes(
+            title_text="가격 ($)", 
+            row=1, col=1,
+            range=[price_min - y_margin, price_max + y_margin]
+        )
+    else:
+        # 폴백: 현재 가격 주변으로 설정
+        current_price = state.current_price
+        fig.update_yaxes(
+            title_text="가격 ($)", 
+            row=1, col=1,
+            range=[current_price * 0.99, current_price * 1.01]
+        )
+    
+    fig.update_yaxes(title_text="거래량", row=2, col=1)
+    fig.update_yaxes(title_text="ADX", row=3, col=1)
 
 def create_pnl_chart(closed_positions):
     """PnL 누적 차트 생성"""
