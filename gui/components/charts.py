@@ -201,11 +201,14 @@ async def create_price_chart(state):
         indicator_data = await _prepare_indicator_data(state, times)
         
         # 3. 차트 레이아웃 생성
+        from plotly.subplots import make_subplots
         fig = make_subplots(
             rows=2, cols=1,
             subplot_titles=("캔들스틱 차트", "거래량"),
             vertical_spacing=0.1,
-            row_heights=[0.7, 0.3]
+            row_heights=[0.7, 0.3],
+            specs=[[{"secondary_y": True}], 
+                   [{"secondary_y": False}]]
         )
         
         # 4. 메인 캔들스틱 차트 추가
@@ -416,7 +419,7 @@ def _add_adx_overlay(fig, state, indicator_data):
     
     try:
         if adx_values and adx_times:
-            # ADX 라인 (우측 Y축 사용)
+            # ADX 라인 (secondary_y=True 사용)
             fig.add_trace(
                 go.Scatter(
                     x=adx_times,
@@ -424,10 +427,9 @@ def _add_adx_overlay(fig, state, indicator_data):
                     mode='lines',
                     name='ADX',
                     line=dict(color='#2E86AB', width=1.5, dash='dot'),
-                    opacity=0.8,
-                    yaxis='y2'  # 우측 Y축 사용
+                    opacity=0.8
                 ),
-                row=1, col=1
+                row=1, col=1, secondary_y=True
             )
             
             # 현재 ADX 값 강조 표시
@@ -438,23 +440,18 @@ def _add_adx_overlay(fig, state, indicator_data):
                         y=[state.adx],
                         mode='markers',
                         name='현재 ADX',
-                        marker=dict(size=6, color='#2E86AB', symbol='circle'),
-                        yaxis='y2'  # 우측 Y축 사용
+                        marker=dict(size=6, color='#2E86AB', symbol='circle')
                     ),
-                    row=1, col=1
+                    row=1, col=1, secondary_y=True
                 )
             
             # 우측 Y축 설정 (ADX용)
-            fig.update_layout(
-                yaxis2=dict(
-                    title="ADX",
-                    overlaying='y',
-                    side='right',
-                    range=[0, max(50, max(adx_values) * 1.1)],
-                    showgrid=False,
-                    tickfont=dict(size=10),
-                    titlefont=dict(size=12)
-                )
+            fig.update_yaxes(
+                title_text="ADX",
+                range=[0, max(50, max(adx_values) * 1.1)],
+                showgrid=False,
+                secondary_y=True,
+                row=1, col=1
             )
         else:
             # ADX 데이터가 없는 경우 현재값만 표시
@@ -467,23 +464,18 @@ def _add_adx_overlay(fig, state, indicator_data):
                         name='현재 ADX',
                         marker=dict(size=8, color='#2E86AB', symbol='circle'),
                         text=[f'ADX: {state.adx:.1f}'],
-                        textposition='top center',
-                        yaxis='y2'
+                        textposition='top center'
                     ),
-                    row=1, col=1
+                    row=1, col=1, secondary_y=True
                 )
                 
                 # 우측 Y축 설정
-                fig.update_layout(
-                    yaxis2=dict(
-                        title="ADX",
-                        overlaying='y',
-                        side='right',
-                        range=[0, 50],
-                        showgrid=False,
-                        tickfont=dict(size=10),
-                        titlefont=dict(size=12)
-                    )
+                fig.update_yaxes(
+                    title_text="ADX",
+                    range=[0, 50],
+                    showgrid=False,
+                    secondary_y=True,
+                    row=1, col=1
                 )
         
     except Exception as e:
