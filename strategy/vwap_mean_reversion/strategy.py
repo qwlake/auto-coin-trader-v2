@@ -1,8 +1,8 @@
 from config.settings import settings
 from utils.logger import log
 from typing import Optional
-from .base_strategy import BaseStrategy
-from .indicators import VWAPCalculator, ADXCalculator, VWAPBandCalculator, VolatilityMonitor
+from ..common.base_strategy import BaseStrategy
+from ..common.indicators import VWAPCalculator, ADXCalculator, VWAPBandCalculator, VolatilityMonitor
 
 
 class VWAPMeanReversionStrategy(BaseStrategy):

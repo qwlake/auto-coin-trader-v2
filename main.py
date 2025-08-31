@@ -19,7 +19,7 @@ import signal
 
 from config.settings import settings
 from utils.logger import log
-from strategy.obi_scalper import signal as obi_signal
+from strategy.obi_scalper.strategy import signal as obi_signal
 from strategy.vwap_mean_reversion import VWAPMeanReversionStrategy
 from executor.order_executor import place_limit_maker, inject_client
 from binance import AsyncClient
@@ -156,9 +156,9 @@ async def monitor_tasks():
         
         # Create informative log message
         if unnamed_task_info:
-            log.info(f"[TaskMonitor] Total: {len(all_tasks)} | Named: {named_tasks} | Unnamed: {unnamed_task_info}")
+            log.debug(f"[TaskMonitor] Total: {len(all_tasks)} | Named: {named_tasks} | Unnamed: {unnamed_task_info}")
         else:
-            log.info(f"[TaskMonitor] Total: {len(all_tasks)} | Running: {named_tasks}")
+            log.debug(f"[TaskMonitor] Total: {len(all_tasks)} | Running: {named_tasks}")
         
         await asyncio.sleep(5)
 

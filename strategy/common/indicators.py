@@ -79,17 +79,29 @@ class ADXCalculator:
     
     def __init__(self, period: int = 14):
         self.period = period
-        self.highs = deque(maxlen=period + 1)
-        self.lows = deque(maxlen=period + 1) 
-        self.closes = deque(maxlen=period + 1)
-        self.tr_values = deque(maxlen=period)
-        self.plus_dm_values = deque(maxlen=period)
-        self.minus_dm_values = deque(maxlen=period)
-        self.dx_values = deque(maxlen=period)
+        self.alpha = 2.0 / (period + 1)  # EMA smoothing factor
+        
+        # Only store current and previous OHLC values
+        self.highs = deque(maxlen=2)
+        self.lows = deque(maxlen=2) 
+        self.closes = deque(maxlen=2)
+        
+        # EMA state variables
+        self._atr_ema: Optional[float] = None
+        self._plus_dm_ema: Optional[float] = None
+        self._minus_dm_ema: Optional[float] = None
+        self._adx_ema: Optional[float] = None
+        
+        # For initial SMA calculation (first period values)
+        self._init_tr_values = deque(maxlen=period)
+        self._init_plus_dm_values = deque(maxlen=period)
+        self._init_minus_dm_values = deque(maxlen=period)
+        self._init_dx_values = deque(maxlen=period)
+        
         self.current_adx: Optional[float] = None
     
     def update(self, high: float, low: float, close: float) -> Optional[float]:
-        """Update ADX with new OHLC data from kline stream"""
+        """Update ADX with new OHLC data using EMA smoothing"""
         from utils.logger import log
         
         if high <= 0 or low <= 0 or close <= 0 or high < low:
@@ -100,55 +112,94 @@ class ADXCalculator:
         self.lows.append(low)
         self.closes.append(close)
         
-        log.debug(f"[ADX] Added OHLC: H:{high:.2f}, L:{low:.2f}, C:{close:.2f} - Total closes: {len(self.closes)}")
+        log.debug(f"[ADX] Added OHLC: H:{high:.2f}, L:{low:.2f}, C:{close:.2f}")
         
+        # Need at least 2 values to calculate TR and DM
         if len(self.closes) < 2:
             log.debug(f"[ADX] Need at least 2 closes, have {len(self.closes)}")
             return None
             
-        # Calculate True Range and Directional Movement
+        # Calculate True Range and Directional Movement for current period
         prev_close = self.closes[-2]
-        tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
-        self.tr_values.append(tr)
+        current_high = self.highs[-1]
+        current_low = self.lows[-1]
         
+        tr = max(current_high - current_low, 
+                abs(current_high - prev_close), 
+                abs(current_low - prev_close))
+        
+        # Calculate Directional Movement
         if len(self.highs) >= 2:
-            high_diff = high - self.highs[-2]
-            low_diff = self.lows[-2] - low
+            high_diff = self.highs[-1] - self.highs[-2]
+            low_diff = self.lows[-2] - self.lows[-1]
             
             plus_dm = max(high_diff, 0) if high_diff > low_diff else 0
             minus_dm = max(low_diff, 0) if low_diff > high_diff else 0
-            
-            self.plus_dm_values.append(plus_dm)
-            self.minus_dm_values.append(minus_dm)
+        else:
+            plus_dm = minus_dm = 0
         
-        if len(self.tr_values) >= self.period:
-            log.debug(f"[ADX] Calculating ADX with {len(self.tr_values)} TR values")
+        # Initialize EMAs with SMA for the first period
+        if self._atr_ema is None:
+            self._init_tr_values.append(tr)
+            self._init_plus_dm_values.append(plus_dm)
+            self._init_minus_dm_values.append(minus_dm)
+            
+            if len(self._init_tr_values) >= self.period:
+                # Initialize EMAs with SMA of first period values
+                self._atr_ema = sum(self._init_tr_values) / len(self._init_tr_values)
+                self._plus_dm_ema = sum(self._init_plus_dm_values) / len(self._init_plus_dm_values)
+                self._minus_dm_ema = sum(self._init_minus_dm_values) / len(self._init_minus_dm_values)
+                
+                log.debug(f"[ADX] Initialized EMAs - ATR:{self._atr_ema:.4f}, +DM:{self._plus_dm_ema:.4f}, -DM:{self._minus_dm_ema:.4f}")
+        else:
+            # Update EMAs with new values
+            self._atr_ema = self.alpha * tr + (1 - self.alpha) * self._atr_ema
+            self._plus_dm_ema = self.alpha * plus_dm + (1 - self.alpha) * self._plus_dm_ema
+            self._minus_dm_ema = self.alpha * minus_dm + (1 - self.alpha) * self._minus_dm_ema
+        
+        # Calculate ADX if EMAs are initialized
+        if self._atr_ema is not None:
             result = self._calculate_adx()
             log.debug(f"[ADX] Calculated ADX: {result}")
             return result
         else:
-            log.debug(f"[ADX] Need {self.period} TR values, have {len(self.tr_values)}")
+            log.debug(f"[ADX] Initializing EMAs: {len(self._init_tr_values)}/{self.period}")
         
         return None
     
     def _calculate_adx(self) -> float:
-        """Calculate ADX using EMA smoothing"""
-        # Calculate smoothed TR, +DM, -DM
-        atr = sum(self.tr_values) / len(self.tr_values)
-        plus_di = 100 * (sum(self.plus_dm_values) / len(self.plus_dm_values)) / atr if atr > 0 else 0
-        minus_di = 100 * (sum(self.minus_dm_values) / len(self.minus_dm_values)) / atr if atr > 0 else 0
+        """Calculate ADX using class EMA attributes"""
+        if self._atr_ema is None or self._atr_ema <= 0:
+            return self.current_adx or 0
+        
+        # Calculate +DI and -DI from EMA values
+        plus_di = 100 * (self._plus_dm_ema / self._atr_ema)
+        minus_di = 100 * (self._minus_dm_ema / self._atr_ema)
         
         # Calculate DX
-        dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di) if (plus_di + minus_di) > 0 else 0
-        self.dx_values.append(dx)
+        di_sum = plus_di + minus_di
+        if di_sum == 0:
+            dx = 0
+        else:
+            dx = 100 * abs(plus_di - minus_di) / di_sum
         
-        # Calculate ADX (EMA of DX)
-        if len(self.dx_values) >= self.period:
-            adx = sum(self.dx_values) / len(self.dx_values)
-            self.current_adx = adx
-            return adx
-        
-        return self.current_adx or 0
+        # Initialize or update ADX EMA
+        if self._adx_ema is None:
+            # Store DX values for initial SMA calculation
+            self._init_dx_values.append(dx)
+            
+            if len(self._init_dx_values) >= self.period:
+                # Initialize ADX EMA with SMA of first period DX values
+                self._adx_ema = sum(self._init_dx_values) / len(self._init_dx_values)
+                self.current_adx = self._adx_ema
+                return self._adx_ema
+            else:
+                return self.current_adx or 0
+        else:
+            # Update ADX EMA with new DX value
+            self._adx_ema = self.alpha * dx + (1 - self.alpha) * self._adx_ema
+            self.current_adx = self._adx_ema
+            return self._adx_ema
     
     def get_adx(self) -> Optional[float]:
         """Get current ADX value"""
