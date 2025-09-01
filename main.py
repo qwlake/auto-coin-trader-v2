@@ -19,7 +19,7 @@ import signal
 
 from config.settings import settings
 from utils.logger import log
-from strategy.obi_scalper.strategy import signal as obi_signal
+from strategy.obi_scalper import OBIScalperStrategy
 from strategy.vwap_mean_reversion import VWAPMeanReversionStrategy
 from executor.order_executor import place_limit_maker, inject_client
 from binance import AsyncClient
@@ -96,7 +96,8 @@ async def run_vwap_strategy(pos_manager: PositionManager):
 
 
 async def run_obi_strategy(pos_manager: PositionManager):
-    """Run OBI Scalping Strategy (existing implementation)"""
+    """Run OBI Scalping Strategy"""
+    strategy = OBIScalperStrategy()
     stream = FuturesDepthStream(settings.SYMBOL)
     ws_task = asyncio.create_task(stream.run(), name="DepthStream")
     
@@ -104,15 +105,18 @@ async def run_obi_strategy(pos_manager: PositionManager):
         while True:
             snap = stream.depth
             if snap and "b" in snap and "a" in snap and len(snap["b"]) > 0 and len(snap["a"]) > 0:
-                sig = obi_signal(snap)
+                # Update strategy with new depth data
+                strategy.update_depth(snap)
+                
+                sig = strategy.signal()
                 bid = float(snap["b"][0][0])
                 ask = float(snap["a"][0][0])
                 mid = (bid + ask) / 2
 
-                if sig == "BUY":
+                if sig == "LONG":
                     order = await place_limit_maker("BUY", mid)
                     await pos_manager.register_order(order, strategy_type="OBI")
-                elif sig == "SELL":
+                elif sig == "SHORT":
                     order = await place_limit_maker("SELL", mid)
                     await pos_manager.register_order(order, strategy_type="OBI")
 
